@@ -21,4 +21,16 @@ public final class ApiAssert {
       throw new ApiFlowException(step + " failed: messageType=" + messageType + " (expected " + expectedSuccess + ")");
     }
   }
+
+  // Step5 needs to allow PENDING (and sometimes SUCCESS)
+  public static void requireMessageTypeIn(String messageType, String step, String... allowed) {
+    if (messageType == null) throw new ApiFlowException(step + " failed: messageType is null");
+
+    String mt = messageType.trim().toUpperCase();
+    for (String a : allowed) {
+      if (a != null && mt.equals(a.trim().toUpperCase())) return;
+    }
+    throw new ApiFlowException(step + " failed: messageType=" + messageType +
+        " (allowed: " + String.join(",", allowed) + ")");
+  }
 }
