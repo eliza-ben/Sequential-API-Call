@@ -83,19 +83,17 @@ String generatedId = String.valueOf(step2Body.generatedId);
 
 ApiAssert.require200(step3.getStatusCodeValue(), "Step3");
 
-    // ================= Step 4: Upload status check =================
-    // If your API is GET with query params, this uses GET.
-    // If your API is POST JSON, switch to postJson(..) with UploadStatusRequest.
-    String step4Url = apiBaseUrl + step4Path
-        + "?generatedId=" + enc(generatedId)
-        + "&fileVersionId=" + fileVersionId;
+  // ================= Step 4: Upload status check (no body) =================
+String step4Url = apiBaseUrl + com.example.flow.util.UrlTemplate.fill(step4Path, generatedId, fileVersionId);
 
-    ResponseEntity<UploadStatusResponse> step4 = api.getJson(step4Url, accessToken, UploadStatusResponse.class);
+var step4 = api.getJson(step4Url, accessToken, com.example.flow.dto.Step4StatusResponse.class);
 
-    ApiAssert.require200(step4.getStatusCodeValue(), "Step4");
-    UploadStatusResponse statusResp = step4.getBody();
-    ApiAssert.requireNotNull(statusResp, "Step4", "response body");
-    ApiAssert.requireMessageTypeSuccess(statusResp.messageType, successMessageType, "Step4");
+com.example.flow.util.ApiAssert.require200(step4.getStatusCodeValue(), "Step4");
+var step4Body = step4.getBody();
+
+com.example.flow.util.ApiAssert.requireNotNull(step4Body, "Step4", "response body");
+com.example.flow.util.ApiAssert.requireMessageTypeSuccess(step4Body.messageType, successMessageType, "Step4");
+
 
     // ================= Step 5: Convert uploaded file =================
     // EDIT: ConvertRequest fields if needed
