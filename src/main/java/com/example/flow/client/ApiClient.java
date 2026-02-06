@@ -3,9 +3,7 @@ package com.example.flow.client;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
-
-import java.security.MessageDigest;
-import java.util.Base64;
+import org.springframework.web.util.UriComponentsBuilder;
 
 @Component
 public class ApiClient {
@@ -38,8 +36,27 @@ public class ApiClient {
         .block();
   }
 
-  /** Step2: POST XLSX bytes to API -> get JSON response */
-  public <T> ResponseEntity<T> postBytesExpectJson(String url, String bearer, byte[] bytes, MediaType contentType, Class<T> clazz) {
+  /** Step2: POST XLSX bytes with query params: contentMD5, fileLength, fileName, autoDuplicateFile */
+  public <T> ResponseEntity<T> postBytesExpectJsonWithQuery(
+      String baseUrl,
+      String path,
+      String bearer,
+      byte[] bytes,
+      MediaType contentType,
+      String contentMD5,
+      long fileLength,
+      String fileName,
+      boolean autoDuplicateFile,
+      Class<T> clazz
+  ) {
+    String url = UriComponentsBuilder.fromHttpUrl(baseUrl + path)
+        .queryParam("contentMD5", contentMD5)
+        .queryParam("fileLength", fileLength)
+        .queryParam("fileName", fileName)
+        .queryParam("autoDuplicateFile", autoDuplicateFile)
+        .build(true)
+        .toUriString();
+
     return web.post()
         .uri(url)
         .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer)
@@ -51,7 +68,7 @@ public class ApiClient {
         .block();
   }
 
-  /** Step4: PUT no body -> get JSON response */
+  /** Step4: PUT no body -> JSON response */
   public <T> ResponseEntity<T> putNoBodyExpectJson(String url, String bearer, Class<T> clazz) {
     return web.put()
         .uri(url)
@@ -62,26 +79,22 @@ public class ApiClient {
         .block();
   }
 
-  /** Step3: PUT to S3 presigned URL with Content-MD5 + Content-Type */
-  public ResponseEntity<Void> putBytesToPresigned(String presignedUrl, byte[] bytes, MediaType contentType) {
-    String contentMd5 = base64Md5(bytes);
-
+  /** Step3: PUT to S3 presigned URL with headers: Content-MD5, file-length (plus Content-Length) */
+  public ResponseEntity<Void> putBytesToPresigned(
+      String presignedUrl,
+      byte[] bytes,
+      MediaType contentType,
+      String contentMD5,
+      long fileLength
+  ) {
     return web.put()
         .uri(presignedUrl)
-        .header("Content-MD5", contentMd5)
+        .header("Content-MD5", contentMD5)
+        .header("file-length", String.valueOf(fileLength))
+        .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(fileLength))
         .contentType(contentType)
         .bodyValue(bytes)
         .exchangeToMono(resp -> resp.toBodilessEntity())
         .block();
-  }
-
-  private static String base64Md5(byte[] bytes) {
-    try {
-      MessageDigest md = MessageDigest.getInstance("MD5");
-      byte[] digest = md.digest(bytes);
-      return Base64.getEncoder().encodeToString(digest);
-    } catch (Exception e) {
-      throw new RuntimeException("Failed to compute MD5", e);
-    }
   }
 }
