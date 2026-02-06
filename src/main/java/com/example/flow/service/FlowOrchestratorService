@@ -77,8 +77,11 @@ ApiAssert.requireNotNull(fileVersionId, "Step2", "data.fileVersionId");
 String generatedId = String.valueOf(step2Body.generatedId);
 
     // ================= Step 3: Upload file to presigned URL =================
-    ResponseEntity<Void> step3 = api.putBytesToPresigned(presignedUrl, xlsxBytes, XLSX);
-    ApiAssert.require200(step3.getStatusCodeValue(), "Step3");
+     ResponseEntity<Void> step3 = api.putBytesToPresigned(presignedUrl, xlsxBytes,
+    MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+);
+
+ApiAssert.require200(step3.getStatusCodeValue(), "Step3");
 
     // ================= Step 4: Upload status check =================
     // If your API is GET with query params, this uses GET.
