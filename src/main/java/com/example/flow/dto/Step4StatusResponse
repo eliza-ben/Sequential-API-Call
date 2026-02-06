@@ -1,0 +1,8 @@
+package com.example.flow.dto;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+public class Step4StatusResponse extends ApiResponseBase {
+  // If your API returns extra fields beyond base, keep this flexible:
+  public JsonNode data;
+}
