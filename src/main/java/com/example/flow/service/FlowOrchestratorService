@@ -41,8 +41,8 @@ public class FlowOrchestratorService {
   public FlowResult runAll(byte[] xlsxBytes, String originalFileName) {
 
     // ================= Step 1: Auth token =================
-    TokenResponse token = auth.getToken();
-    String accessToken = token.accessToken;
+      TokenResponse token = auth.getTokenStrict();
+      String accessToken = token.accessToken;
 
     // ================= Step 2: Get presigned URL =================
     // EDIT: PresignRequest fields to match your API exactly
