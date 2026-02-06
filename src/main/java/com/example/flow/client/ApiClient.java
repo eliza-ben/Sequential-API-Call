@@ -36,13 +36,17 @@ public class ApiClient {
         .block();
   }
 
-  /** Step2: POST XLSX bytes with query params: contentMD5, fileLength, fileName, autoDuplicateFile */
-  public <T> ResponseEntity<T> postBytesExpectJsonWithQuery(
+  /**
+   * Step2: POST file bytes with query params:
+   *   contentMD5, fileLength, fileName, autoDuplicateFile
+   * AND send contentType as header (both Content-Type and custom contentType).
+   */
+  public <T> ResponseEntity<T> step2PostBytesWithQueryAndContentTypeHeader(
       String baseUrl,
       String path,
       String bearer,
       byte[] bytes,
-      MediaType contentType,
+      String contentTypeHeaderValue,
       String contentMD5,
       long fileLength,
       String fileName,
@@ -57,18 +61,24 @@ public class ApiClient {
         .build(true)
         .toUriString();
 
+    MediaType mt = parseMediaTypeOrOctet(contentTypeHeaderValue);
+
     return web.post()
         .uri(url)
         .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer)
         .header(HttpHeaders.CACHE_CONTROL, "no-cache")
-        .contentType(contentType)
+        // ✅ required by your request: contentType as header in Step2
+        .header("contentType", contentTypeHeaderValue)   // custom header (change name if needed)
+        .contentType(mt)                                 // standard Content-Type header
         .accept(MediaType.APPLICATION_JSON)
         .bodyValue(bytes)
         .exchangeToMono(resp -> resp.toEntity(clazz))
         .block();
   }
 
-  /** Step4: PUT no body -> JSON response */
+  /**
+   * Step4: PUT no body -> JSON response.
+   */
   public <T> ResponseEntity<T> putNoBodyExpectJson(String url, String bearer, Class<T> clazz) {
     return web.put()
         .uri(url)
@@ -79,22 +89,43 @@ public class ApiClient {
         .block();
   }
 
-  /** Step3: PUT to S3 presigned URL with headers: Content-MD5, file-length (plus Content-Length) */
-  public ResponseEntity<Void> putBytesToPresigned(
+  /**
+   * Step3: PUT to presigned URL with headers:
+   *   Content-MD5, file-length
+   * AND send contentType as header (both Content-Type and custom contentType).
+   */
+  public ResponseEntity<Void> step3PutBytesToPresignedWithHeaders(
       String presignedUrl,
       byte[] bytes,
-      MediaType contentType,
+      String contentTypeHeaderValue,
       String contentMD5,
       long fileLength
   ) {
+    MediaType mt = parseMediaTypeOrOctet(contentTypeHeaderValue);
+
     return web.put()
         .uri(presignedUrl)
+        // ✅ required headers
         .header("Content-MD5", contentMD5)
         .header("file-length", String.valueOf(fileLength))
+        // strongly recommended standard length header too
         .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(fileLength))
-        .contentType(contentType)
+        // ✅ required by your request: contentType as header in Step3
+        .header("contentType", contentTypeHeaderValue) // custom header (change name if needed)
+        .contentType(mt)                               // standard Content-Type header
         .bodyValue(bytes)
         .exchangeToMono(resp -> resp.toBodilessEntity())
         .block();
+  }
+
+  private static MediaType parseMediaTypeOrOctet(String contentTypeHeaderValue) {
+    if (contentTypeHeaderValue == null || contentTypeHeaderValue.isBlank()) {
+      return MediaType.APPLICATION_OCTET_STREAM;
+    }
+    try {
+      return MediaType.parseMediaType(contentTypeHeaderValue);
+    } catch (Exception e) {
+      return MediaType.APPLICATION_OCTET_STREAM;
+    }
   }
 }
