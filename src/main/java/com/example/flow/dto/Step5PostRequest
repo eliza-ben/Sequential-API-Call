@@ -1,0 +1,24 @@
+package com.example.flow.dto;
+
+import java.util.List;
+
+public class Step5PostRequest {
+  public String actionType;   // "UPLOAD"
+  public String entityType;   // "INVOICE"
+  public List<Item> requests;
+
+  public static class Item {
+    public boolean genericFormat;
+    public Long fileVersionId;
+    public Long partnerId;
+    public String fileName;
+
+    public Item() {}
+    public Item(boolean genericFormat, Long fileVersionId, Long partnerId, String fileName) {
+      this.genericFormat = genericFormat;
+      this.fileVersionId = fileVersionId;
+      this.partnerId = partnerId;
+      this.fileName = fileName;
+    }
+  }
+}
