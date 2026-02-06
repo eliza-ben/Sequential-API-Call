@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 
 @Component
 public class ApiClient {
@@ -71,6 +74,15 @@ public class ApiClient {
   } catch (Exception e) {
     throw new RuntimeException("Failed to compute MD5", e);
   }
+}
+public <T> ResponseEntity<T> putNoBodyExpectJson(String url, String bearer, Class<T> clazz) {
+  return web.put()
+      .uri(url)
+      .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer)
+      .header(HttpHeaders.CACHE_CONTROL, "no-cache")
+      .accept(MediaType.APPLICATION_JSON)
+      .exchangeToMono(resp -> resp.toEntity(clazz))
+      .block();
 }
 
 }
