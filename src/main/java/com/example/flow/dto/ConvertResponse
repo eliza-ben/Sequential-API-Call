@@ -1,5 +1,0 @@
-package com.example.flow.dto;
-
-public class ConvertResponse extends ApiResponseBase {
-  // Step6 needs response.message (already in base)
-}
