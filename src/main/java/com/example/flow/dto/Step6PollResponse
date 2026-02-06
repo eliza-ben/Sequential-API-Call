@@ -1,0 +1,15 @@
+package com.example.flow.dto;
+
+import java.util.List;
+import java.util.Map;
+
+public class Step6PollResponse extends ApiResponseBase {
+  public String rowDataType;
+  public List<Item> data;
+  public Object pagination;
+  public Object timeLog;
+
+  public static class Item {
+    public Map<String, Integer> statusCountMap; // {"Total":1,"ERROR":1}
+  }
+}
