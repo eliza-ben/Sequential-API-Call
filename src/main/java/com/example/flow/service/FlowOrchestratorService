@@ -83,17 +83,17 @@ String generatedId = String.valueOf(step2Body.generatedId);
 
 ApiAssert.require200(step3.getStatusCodeValue(), "Step3");
 
-  // ================= Step 4: Upload status check (no body) =================
+// ================= Step 4: Upload status check (PUT, no body) =================
 String step4Url = apiBaseUrl + com.example.flow.util.UrlTemplate.fill(step4Path, generatedId, fileVersionId);
 
-var step4 = api.getJson(step4Url, accessToken, com.example.flow.dto.Step4StatusResponse.class);
+ResponseEntity<com.example.flow.dto.Step4StatusResponse> step4 =
+    api.putNoBodyExpectJson(step4Url, accessToken, com.example.flow.dto.Step4StatusResponse.class);
 
 com.example.flow.util.ApiAssert.require200(step4.getStatusCodeValue(), "Step4");
 var step4Body = step4.getBody();
 
 com.example.flow.util.ApiAssert.requireNotNull(step4Body, "Step4", "response body");
 com.example.flow.util.ApiAssert.requireMessageTypeSuccess(step4Body.messageType, successMessageType, "Step4");
-
 
     // ================= Step 5: Convert uploaded file =================
     // EDIT: ConvertRequest fields if needed
