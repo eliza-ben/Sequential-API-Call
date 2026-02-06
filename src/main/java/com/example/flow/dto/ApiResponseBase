@@ -2,7 +2,8 @@ package com.example.flow.dto;
 
 public class ApiResponseBase {
   public boolean result;
-  public String messageType;   // "SUCCESS" etc
+  public boolean warning;
+  public String messageType;
   public Integer errorCode;
   public String message;
 }
