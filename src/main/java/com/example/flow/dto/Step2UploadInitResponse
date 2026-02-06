@@ -1,0 +1,17 @@
+package com.example.flow.dto;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+public class Step2UploadInitResponse extends ApiResponseBase {
+
+  public Long generatedId;
+
+  // In your screenshot, "data" is an array like:
+  // [ {"preSignedURL": "..."}, {"fileVersionId": 123}, {"newFileName":"..."} ]
+  public JsonNode data;
+
+  public JsonNode pagination;
+  public JsonNode timeLog;
+
+  public String rowDataType;
+}
