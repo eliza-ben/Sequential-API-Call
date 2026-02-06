@@ -18,8 +18,10 @@ public class FlowController {
 
   @PostMapping("/run")
   public ResponseEntity<FlowResult> run(@RequestPart("file") MultipartFile file) throws Exception {
-    byte[] bytes = file.getBytes();
-    FlowResult result = flow.runAll(bytes, file.getOriginalFilename());
+      byte[] bytes = file.getBytes();
+      String fileName = file.getOriginalFilename();
+      String contentType = (file.getContentType() == null) ? "application/octet-stream" : file.getContentType();
+      FlowResult result = flow.runAll(bytes, fiileName, contentType);
     return ResponseEntity.ok(result);
   }
 }
