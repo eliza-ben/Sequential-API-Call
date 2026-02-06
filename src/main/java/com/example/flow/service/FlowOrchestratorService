@@ -95,22 +95,51 @@ var step4Body = step4.getBody();
 com.example.flow.util.ApiAssert.requireNotNull(step4Body, "Step4", "response body");
 com.example.flow.util.ApiAssert.requireMessageTypeSuccess(step4Body.messageType, successMessageType, "Step4");
 
-    // ================= Step 5: Convert uploaded file =================
-    // EDIT: ConvertRequest fields if needed
-    ConvertRequest convertReq = new ConvertRequest(generatedId, fileVersionId);
+// ================= Step 5: POST (returns PENDING + message UUID) =================
 
-    ResponseEntity<ConvertResponse> step5 = api.postJson(
-        apiBaseUrl + step5Path, accessToken, convertReq, ConvertResponse.class
-    );
+// Choose a filename to send:
+// - If Step2 returned newFileName in data array, use it
+// - Otherwise fall back to the original filename
+String newFileName = com.example.flow.util.Step2DataExtractor.extractNewFileName(step2Body.data);
+String fileNameForStep5 = (newFileName != null) ? newFileName : originalFileName;
 
-    ApiAssert.require200(step5.getStatusCodeValue(), "Step5");
-    ConvertResponse convertResp = step5.getBody();
-    ApiAssert.requireNotNull(convertResp, "Step5", "response body");
-    ApiAssert.requireMessageTypeSuccess(convertResp.messageType, successMessageType, "Step5");
+com.example.flow.util.ApiAssert.requireNotBlank(fileNameForStep5, "Step5", "fileName");
 
-    // You said Step6 needs Step5 response.message
-    ApiAssert.requireNotBlank(convertResp.message, "Step5", "response.message");
-    String messageForStep6 = convertResp.message;
+Long partnerId = step5PartnerId; // injected from properties (shown below)
+
+com.example.flow.dto.Step5PostRequest req = new com.example.flow.dto.Step5PostRequest();
+req.actionType = step5ActionType; // "UPLOAD"
+req.entityType = step5EntityType; // "INVOICE"
+req.requests = java.util.List.of(
+    new com.example.flow.dto.Step5PostRequest.Item(
+        step5GenericFormat,   // true
+        fileVersionId,        // from Step2
+        partnerId,
+        fileNameForStep5
+    )
+);
+
+var step5 = api.postJson(
+    apiBaseUrl + step5PostPath,
+    accessToken,
+    req,
+    com.example.flow.dto.Step5PostResponse.class
+);
+
+com.example.flow.util.ApiAssert.require200(step5.getStatusCodeValue(), "Step5");
+
+var step5Body = step5.getBody();
+com.example.flow.util.ApiAssert.requireNotNull(step5Body, "Step5", "response body");
+
+// ✅ Step5 can be PENDING or SUCCESS (your screenshot is PENDING)
+com.example.flow.util.ApiAssert.requireMessageTypeIn(step5Body.messageType, "Step5", "PENDING", "SUCCESS");
+
+// Step6 needs Step5 response.message
+com.example.flow.util.ApiAssert.requireNotBlank(step5Body.message, "Step5", "response.message");
+String messageForStep6 = step5Body.message;
+
+
+
 
     // ================= Step 6: Poll for message status =================
     MessageStatusResponse finalMsg = pollMessageStatus(accessToken, messageForStep6);
