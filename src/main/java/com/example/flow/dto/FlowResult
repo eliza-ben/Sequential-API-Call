@@ -1,0 +1,10 @@
+package com.example.flow.dto;
+
+public class FlowResult {
+  public String generatedId;
+  public Long fileVersionId;
+
+  public String step5Message;        // used for Step6
+  public String finalMessageType;    // Step6 messageType
+  public String finalMessage;        // Step6 message
+}
