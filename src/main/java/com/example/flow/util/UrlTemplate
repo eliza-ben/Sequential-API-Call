@@ -1,0 +1,12 @@
+package com.example.flow.util;
+
+public final class UrlTemplate {
+  private UrlTemplate() {}
+
+  public static String fill(String template, String generatedId, Long fileVersionId) {
+    String out = template;
+    out = out.replace("{generatedId}", generatedId == null ? "" : generatedId);
+    out = out.replace("{fileVersionId}", fileVersionId == null ? "" : String.valueOf(fileVersionId));
+    return out;
+  }
+}
