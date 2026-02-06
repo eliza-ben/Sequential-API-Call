@@ -1,0 +1,11 @@
+package com.example.flow.dto;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+public class Step2UploadInitResponse extends ApiResponseBase {
+  public Long generatedId;
+  public String rowDataType;
+  public JsonNode data;       // array in your screenshot
+  public JsonNode pagination;
+  public JsonNode timeLog;
+}
