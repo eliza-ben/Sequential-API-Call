@@ -10,4 +10,8 @@ public class FlowResult {
 
   public String step6FinalMessageType;
   public String step6FinalMessage;
+public long fileSizeBytes;
+public double fileSizeKB;
+public double fileSizeMB;
+
 }
