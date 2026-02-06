@@ -1,0 +1,11 @@
+package com.example.flow.dto;
+
+public class MessageStatusRequest {
+  // Step6 uses Step5 response.message (your requirement)
+  public String message;
+
+  public MessageStatusRequest() {}
+  public MessageStatusRequest(String message) {
+    this.message = message;
+  }
+}
