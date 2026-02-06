@@ -1,0 +1,64 @@
+package com.example.flow.util;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+public final class Step2DataExtractor {
+  private Step2DataExtractor() {}
+
+  public static String extractPresignedUrl(JsonNode data) {
+    return extractAnyString(data, "preSignedURL", "presignedUrl", "preSignedUrl");
+  }
+
+  public static Long extractFileVersionId(JsonNode data) {
+    return extractAnyLong(data, "fileVersionId", "fileVersionID");
+  }
+
+  public static String extractNewFileName(JsonNode data) {
+    return extractAnyString(data, "newFileName", "newFilename", "fileName", "filename");
+  }
+
+  private static String extractAnyString(JsonNode data, String... keys) {
+    JsonNode n = findFirstValueNode(data, keys);
+    if (n == null || n.isNull()) return null;
+    String v = n.asText();
+    return (v == null || v.trim().isEmpty()) ? null : v.trim();
+  }
+
+  private static Long extractAnyLong(JsonNode data, String... keys) {
+    JsonNode n = findFirstValueNode(data, keys);
+    if (n == null || n.isNull()) return null;
+    if (n.isNumber()) return n.asLong();
+    String s = n.asText(null);
+    if (s == null) return null;
+    try { return Long.parseLong(s.trim()); } catch (Exception e) { return null; }
+  }
+
+  private static JsonNode findFirstValueNode(JsonNode data, String... keys) {
+    if (data == null || data.isNull()) return null;
+
+    if (data.isObject()) {
+      for (String k : keys) {
+        JsonNode v = data.get(k);
+        if (v != null && !v.isNull()) return v;
+      }
+    }
+
+    if (data.isArray()) {
+      for (JsonNode item : data) {
+        if (item != null && item.isObject()) {
+          for (String k : keys) {
+            JsonNode v = item.get(k);
+            if (v != null && !v.isNull()) return v;
+          }
+        }
+      }
+    }
+
+    for (String k : keys) {
+      JsonNode found = data.findValue(k);
+      if (found != null && !found.isNull()) return found;
+    }
+
+    return null;
+  }
+}
