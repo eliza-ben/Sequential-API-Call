@@ -1,0 +1,6 @@
+package com.example.flow.util;
+
+public class ApiFlowException extends RuntimeException {
+  public ApiFlowException(String message) { super(message); }
+  public ApiFlowException(String message, Throwable cause) { super(message, cause); }
+}
