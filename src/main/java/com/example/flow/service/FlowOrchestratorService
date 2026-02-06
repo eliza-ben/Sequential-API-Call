@@ -17,6 +17,8 @@ public class FlowOrchestratorService {
 
   private final AuthTokenService auth;
   private final ApiClient api;
+@Value("${api.step6.message-status-path}") private String step6Path;
+
 @Value("${api.step5.post-path}") private String step5PostPath;
 
 @Value("${flow.step5.partner-id}") private Long step5PartnerId;
@@ -148,6 +150,12 @@ String messageForStep6 = step5Body.message;
 
 
     // ================= Step 6: Poll for message status =================
+// Step6 uses UUID from Step5 response.message
+var step6Final = pollStep6(accessToken, messageForStep6);
+
+// Enforce final requirement
+com.example.flow.util.ApiAssert.requireMessageTypeSuccess(step6Final.messageType, successMessageType, "Step6");
+
     MessageStatusResponse finalMsg = pollMessageStatus(accessToken, messageForStep6);
 
     FlowResult out = new FlowResult();
@@ -158,6 +166,34 @@ String messageForStep6 = step5Body.message;
     out.finalMessage = finalMsg.message;
     return out;
   }
+
+private com.example.flow.dto.Step6PollResponse pollStep6(String accessToken, String messageKey) {
+  for (int attempt = 1; attempt <= pollMaxAttempts; attempt++) {
+
+    String step6Url = apiBaseUrl
+        + com.example.flow.util.UrlTemplate.fillMessage(step6Path, java.net.URLEncoder.encode(messageKey, java.nio.charset.StandardCharsets.UTF_8));
+
+    var resp = api.getJson(step6Url, accessToken, com.example.flow.dto.Step6PollResponse.class);
+
+    com.example.flow.util.ApiAssert.require200(resp.getStatusCodeValue(), "Step6 (attempt " + attempt + ")");
+    var body = resp.getBody();
+    com.example.flow.util.ApiAssert.requireNotNull(body, "Step6", "response body");
+
+    // ✅ stop only when messageType == SUCCESS
+    if (body.messageType != null && body.messageType.trim().equalsIgnoreCase(successMessageType)) {
+      return body;
+    }
+
+    // Optional early fail if API ever returns FAILURE
+    if (body.messageType != null && body.messageType.trim().equalsIgnoreCase("FAILURE")) {
+      throw new com.example.flow.util.ApiFlowException("Step6 failed: messageType=FAILURE message=" + body.message);
+    }
+
+    sleep(pollSleepMs);
+  }
+
+  throw new com.example.flow.util.ApiFlowException("Step6 timeout: did not reach messageType=" + successMessageType);
+}
 
   private MessageStatusResponse pollMessageStatus(String accessToken, String messageKey) {
     for (int attempt = 1; attempt <= pollMaxAttempts; attempt++) {
