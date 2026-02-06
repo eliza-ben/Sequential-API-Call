@@ -1,0 +1,9 @@
+package com.example.flow.dto;
+
+public class UploadStatusResponse extends ApiResponseBase {
+  public Data data;
+
+  public static class Data {
+    public String status;
+  }
+}
