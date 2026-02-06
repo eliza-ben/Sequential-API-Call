@@ -2,8 +2,8 @@ package com.example.flow.service;
 
 import com.example.flow.client.ApiClient;
 import com.example.flow.dto.*;
-import com.example.flow.util.ApiAssert;
-import com.example.flow.util.ApiFlowException;
+import com.example.flow.util.*;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 @Service
 public class FlowOrchestratorService {
@@ -20,15 +21,20 @@ public class FlowOrchestratorService {
 
   @Value("${api.base-url}") private String apiBaseUrl;
 
-  @Value("${api.step2.presign-path}") private String step2Path;
-  @Value("${api.step4.status-path}") private String step4Path;
-  @Value("${api.step5.convert-path}") private String step5Path;
-  @Value("${api.step6.message-status-path}") private String step6Path;
+  @Value("${api.step2.path}") private String step2Path;
+  @Value("${api.step4.path}") private String step4Path;
+  @Value("${api.step5.path}") private String step5Path;
+  @Value("${api.step6.path}") private String step6Path;
 
   @Value("${flow.success-message-type:SUCCESS}") private String successMessageType;
 
   @Value("${flow.poll.max-attempts:30}") private int pollMaxAttempts;
   @Value("${flow.poll.sleep-ms:2000}") private long pollSleepMs;
+
+  @Value("${flow.step5.partner-id}") private Long step5PartnerId;
+  @Value("${flow.step5.entity-type:INVOICE}") private String step5EntityType;
+  @Value("${flow.step5.action-type:UPLOAD}") private String step5ActionType;
+  @Value("${flow.step5.generic-format:true}") private boolean step5GenericFormat;
 
   private static final MediaType XLSX =
       MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -40,97 +46,110 @@ public class FlowOrchestratorService {
 
   public FlowResult runAll(byte[] xlsxBytes, String originalFileName) {
 
-    // ================= Step 1: Auth token =================
-    TokenResponse token = auth.getToken();
+    // ============ Step 1: Auth token ============
+    TokenResponse token = auth.getTokenStrict();
     String accessToken = token.accessToken;
 
-    // ================= Step 2: Get presigned URL =================
-    // EDIT: PresignRequest fields to match your API exactly
-    PresignRequest presignReq = new PresignRequest(keepNameOrDefault(originalFileName), XLSX.toString());
-
-    ResponseEntity<PresignResponse> step2 = api.postJson(
-        apiBaseUrl + step2Path, accessToken, presignReq, PresignResponse.class
+    // ============ Step 2: POST XLSX bytes (init/upload) ============
+    ResponseEntity<Step2UploadInitResponse> step2 = api.postBytesExpectJson(
+        apiBaseUrl + step2Path,
+        accessToken,
+        xlsxBytes,
+        XLSX,
+        Step2UploadInitResponse.class
     );
 
     ApiAssert.require200(step2.getStatusCodeValue(), "Step2");
-    PresignResponse presignResp = step2.getBody();
-    ApiAssert.requireNotNull(presignResp, "Step2", "response body");
-    ApiAssert.requireMessageTypeSuccess(presignResp.messageType, successMessageType, "Step2");
+    Step2UploadInitResponse s2 = step2.getBody();
+    ApiAssert.requireNotNull(s2, "Step2", "response body");
+    ApiAssert.requireMessageTypeSuccess(s2.messageType, successMessageType, "Step2");
 
-    ApiAssert.requireNotNull(presignResp.data, "Step2", "data");
-    ApiAssert.requireNotBlank(presignResp.data.presignedUrl, "Step2", "data.presignedUrl");
-    ApiAssert.requireNotBlank(presignResp.data.generatedId, "Step2", "data.generatedId");
-    ApiAssert.requireNotNull(presignResp.data.fileVersionId, "Step2", "data.fileVersionId");
+    ApiAssert.requireNotNull(s2.generatedId, "Step2", "generatedId");
 
-    String presignedUrl = presignResp.data.presignedUrl;
-    String generatedId = presignResp.data.generatedId;
-    Long fileVersionId = presignResp.data.fileVersionId;
+    String presignedUrl = Step2DataExtractor.extractPresignedUrl(s2.data);
+    Long fileVersionId = Step2DataExtractor.extractFileVersionId(s2.data);
+    String newFileName = Step2DataExtractor.extractNewFileName(s2.data);
 
-    // ================= Step 3: Upload file to presigned URL =================
+    ApiAssert.requireNotBlank(presignedUrl, "Step2", "data.preSignedURL");
+    ApiAssert.requireNotNull(fileVersionId, "Step2", "data.fileVersionId");
+
+    // ============ Step 3: PUT to S3 presigned URL (Content-MD5 required) ============
     ResponseEntity<Void> step3 = api.putBytesToPresigned(presignedUrl, xlsxBytes, XLSX);
     ApiAssert.require200(step3.getStatusCodeValue(), "Step3");
 
-    // ================= Step 4: Upload status check =================
-    // If your API is GET with query params, this uses GET.
-    // If your API is POST JSON, switch to postJson(..) with UploadStatusRequest.
-    String step4Url = apiBaseUrl + step4Path
-        + "?generatedId=" + enc(generatedId)
-        + "&fileVersionId=" + fileVersionId;
+    // ============ Step 4: PUT no body (status check) ============
+    String step4Url = apiBaseUrl + UrlTemplate.fillStep4(step4Path, String.valueOf(s2.generatedId), fileVersionId);
 
-    ResponseEntity<UploadStatusResponse> step4 = api.getJson(step4Url, accessToken, UploadStatusResponse.class);
+    ResponseEntity<Step4StatusResponse> step4 = api.putNoBodyExpectJson(
+        step4Url, accessToken, Step4StatusResponse.class
+    );
 
     ApiAssert.require200(step4.getStatusCodeValue(), "Step4");
-    UploadStatusResponse statusResp = step4.getBody();
-    ApiAssert.requireNotNull(statusResp, "Step4", "response body");
-    ApiAssert.requireMessageTypeSuccess(statusResp.messageType, successMessageType, "Step4");
+    Step4StatusResponse s4 = step4.getBody();
+    ApiAssert.requireNotNull(s4, "Step4", "response body");
+    ApiAssert.requireMessageTypeSuccess(s4.messageType, successMessageType, "Step4");
 
-    // ================= Step 5: Convert uploaded file =================
-    // EDIT: ConvertRequest fields if needed
-    ConvertRequest convertReq = new ConvertRequest(generatedId, fileVersionId);
+    // ============ Step 5: POST JSON (returns PENDING + message UUID) ============
+    String fileNameForStep5 = (newFileName != null && !newFileName.isBlank())
+        ? newFileName
+        : originalFileName;
 
-    ResponseEntity<ConvertResponse> step5 = api.postJson(
-        apiBaseUrl + step5Path, accessToken, convertReq, ConvertResponse.class
+    ApiAssert.requireNotBlank(fileNameForStep5, "Step5", "fileName");
+
+    Step5PostRequest req = new Step5PostRequest();
+    req.actionType = step5ActionType;
+    req.entityType = step5EntityType;
+    req.requests = List.of(new Step5PostRequest.Item(step5GenericFormat, fileVersionId, step5PartnerId, fileNameForStep5));
+
+    ResponseEntity<Step5PostResponse> step5 = api.postJson(
+        apiBaseUrl + step5Path,
+        accessToken,
+        req,
+        Step5PostResponse.class
     );
 
     ApiAssert.require200(step5.getStatusCodeValue(), "Step5");
-    ConvertResponse convertResp = step5.getBody();
-    ApiAssert.requireNotNull(convertResp, "Step5", "response body");
-    ApiAssert.requireMessageTypeSuccess(convertResp.messageType, successMessageType, "Step5");
+    Step5PostResponse s5 = step5.getBody();
+    ApiAssert.requireNotNull(s5, "Step5", "response body");
 
-    // You said Step6 needs Step5 response.message
-    ApiAssert.requireNotBlank(convertResp.message, "Step5", "response.message");
-    String messageForStep6 = convertResp.message;
+    // Your screenshot shows PENDING here; allow it.
+    ApiAssert.requireMessageTypeIn(s5.messageType, "Step5", "PENDING", "SUCCESS");
 
-    // ================= Step 6: Poll for message status =================
-    MessageStatusResponse finalMsg = pollMessageStatus(accessToken, messageForStep6);
+    ApiAssert.requireNotBlank(s5.message, "Step5", "response.message");
+    String messageUuid = s5.message;
 
+    // ============ Step 6: Poll GET until messageType SUCCESS ============
+    Step6PollResponse s6 = pollStep6(accessToken, messageUuid);
+    ApiAssert.requireMessageTypeSuccess(s6.messageType, successMessageType, "Step6");
+
+    // ============ Final output ============
     FlowResult out = new FlowResult();
-    out.generatedId = generatedId;
+    out.step2GeneratedId = s2.generatedId;
     out.fileVersionId = fileVersionId;
-    out.step5Message = messageForStep6;
-    out.finalMessageType = finalMsg.messageType;
-    out.finalMessage = finalMsg.message;
+    out.newFileName = newFileName;
+    out.presignedUrl = presignedUrl;
+    out.step5MessageUuid = messageUuid;
+    out.step6FinalMessageType = s6.messageType;
+    out.step6FinalMessage = s6.message;
     return out;
   }
 
-  private MessageStatusResponse pollMessageStatus(String accessToken, String messageKey) {
+  private Step6PollResponse pollStep6(String accessToken, String messageKey) {
     for (int attempt = 1; attempt <= pollMaxAttempts; attempt++) {
 
-      // If your Step6 endpoint is GET ?message=...
-      String url = apiBaseUrl + step6Path + "?message=" + enc(messageKey);
+      String encoded = URLEncoder.encode(messageKey, StandardCharsets.UTF_8);
+      String url = apiBaseUrl + UrlTemplate.fillMessage(step6Path, encoded);
 
-      ResponseEntity<MessageStatusResponse> step6 = api.getJson(url, accessToken, MessageStatusResponse.class);
+      ResponseEntity<Step6PollResponse> step6 = api.getJson(url, accessToken, Step6PollResponse.class);
+
       ApiAssert.require200(step6.getStatusCodeValue(), "Step6 (attempt " + attempt + ")");
+      Step6PollResponse body = step6.getBody();
+      ApiAssert.requireNotNull(body, "Step6", "response body");
 
-      MessageStatusResponse body = step6.getBody();
-      if (body == null) throw new ApiFlowException("Step6 failed: null body (attempt " + attempt + ")");
-
-      // Your requirement: messageType must be success
       if (body.messageType != null && body.messageType.trim().equalsIgnoreCase(successMessageType)) {
         return body;
       }
 
-      // If API ever returns an explicit failure messageType, stop early
       if (body.messageType != null && body.messageType.trim().equalsIgnoreCase("FAILURE")) {
         throw new ApiFlowException("Step6 failed: messageType=FAILURE message=" + body.message);
       }
@@ -145,16 +164,7 @@ public class FlowOrchestratorService {
     try { Thread.sleep(ms); }
     catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      throw new ApiFlowException("Polling interrupted", e);
+      throw new ApiFlowException("Step6 polling interrupted", e);
     }
-  }
-
-  private static String enc(String s) {
-    return URLEncoder.encode(s, StandardCharsets.UTF_8);
-  }
-
-  private static String keepNameOrDefault(String name) {
-    if (name == null || name.isBlank()) return "upload.xlsx";
-    return name;
   }
 }
