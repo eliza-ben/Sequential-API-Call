@@ -1,5 +1,6 @@
 package com.example.flow.client;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -33,7 +34,22 @@ public class ApiClient {
         .block();
   }
 
-  /** Step3: Upload bytes to presigned URL (often PUT to S3). */
+  /** Step2 style: POST XLSX bytes to API, get JSON response back */
+  public <T> ResponseEntity<T> postBytesExpectJson(
+      String url, String bearer, byte[] bytes, MediaType contentType, Class<T> clazz
+  ) {
+    return web.post()
+        .uri(url)
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer)
+        .header(HttpHeaders.CACHE_CONTROL, "no-cache")
+        .contentType(contentType)
+        .accept(MediaType.APPLICATION_JSON)
+        .bodyValue(bytes)
+        .exchangeToMono(resp -> resp.toEntity(clazz))
+        .block();
+  }
+
+  /** Step3 style: Upload bytes to presigned URL (often PUT). */
   public ResponseEntity<Void> putBytesToPresigned(String presignedUrl, byte[] bytes, MediaType contentType) {
     return web.put()
         .uri(presignedUrl)
