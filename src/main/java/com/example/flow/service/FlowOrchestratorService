@@ -155,6 +155,11 @@ var step6Final = pollStep6(accessToken, messageForStep6);
 
 // Enforce final requirement
 com.example.flow.util.ApiAssert.requireMessageTypeSuccess(step6Final.messageType, successMessageType, "Step6");
+if (step6Final.data != null && !step6Final.data.isEmpty()
+    && step6Final.data.get(0).statusCountMap != null
+    && step6Final.data.get(0).statusCountMap.getOrDefault("ERROR", 0) > 0) {
+  throw new com.example.flow.util.ApiFlowException("Step6 SUCCESS but ERROR count > 0");
+}
 
     MessageStatusResponse finalMsg = pollMessageStatus(accessToken, messageForStep6);
 
