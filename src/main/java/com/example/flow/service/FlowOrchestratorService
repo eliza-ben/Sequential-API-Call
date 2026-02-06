@@ -46,25 +46,35 @@ public class FlowOrchestratorService {
 
     // ================= Step 2: Get presigned URL =================
     // EDIT: PresignRequest fields to match your API exactly
-    PresignRequest presignReq = new PresignRequest(keepNameOrDefault(originalFileName), XLSX.toString());
+// ================= Step 2: Upload/init (your screenshot) =================
+var step2Url = apiBaseUrl + step2Path;
 
-    ResponseEntity<PresignResponse> step2 = api.postJson(
-        apiBaseUrl + step2Path, accessToken, presignReq, PresignResponse.class
-    );
+ResponseEntity<Step2UploadInitResponse> step2 = api.postBytesExpectJson(
+    step2Url,
+    accessToken,
+    xlsxBytes,
+    MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    Step2UploadInitResponse.class
+);
 
-    ApiAssert.require200(step2.getStatusCodeValue(), "Step2");
-    PresignResponse presignResp = step2.getBody();
-    ApiAssert.requireNotNull(presignResp, "Step2", "response body");
-    ApiAssert.requireMessageTypeSuccess(presignResp.messageType, successMessageType, "Step2");
+ApiAssert.require200(step2.getStatusCodeValue(), "Step2");
+Step2UploadInitResponse step2Body = step2.getBody();
+ApiAssert.requireNotNull(step2Body, "Step2", "response body");
+ApiAssert.requireMessageTypeSuccess(step2Body.messageType, successMessageType, "Step2");
 
-    ApiAssert.requireNotNull(presignResp.data, "Step2", "data");
-    ApiAssert.requireNotBlank(presignResp.data.presignedUrl, "Step2", "data.presignedUrl");
-    ApiAssert.requireNotBlank(presignResp.data.generatedId, "Step2", "data.generatedId");
-    ApiAssert.requireNotNull(presignResp.data.fileVersionId, "Step2", "data.fileVersionId");
+// required outputs
+ApiAssert.requireNotNull(step2Body.generatedId, "Step2", "generatedId");
 
-    String presignedUrl = presignResp.data.presignedUrl;
-    String generatedId = presignResp.data.generatedId;
-    Long fileVersionId = presignResp.data.fileVersionId;
+String presignedUrl = com.example.flow.util.Step2DataExtractor.extractPresignedUrl(step2Body.data);
+Long fileVersionId  = com.example.flow.util.Step2DataExtractor.extractFileVersionId(step2Body.data);
+
+// Your flow says Step3 needs presignedUrl. If your API sometimes returns blank,
+// we still validate presence because Step3 can’t run without it.
+ApiAssert.requireNotBlank(presignedUrl, "Step2", "data.preSignedURL");
+ApiAssert.requireNotNull(fileVersionId, "Step2", "data.fileVersionId");
+
+// carry forward:
+String generatedId = String.valueOf(step2Body.generatedId);
 
     // ================= Step 3: Upload file to presigned URL =================
     ResponseEntity<Void> step3 = api.putBytesToPresigned(presignedUrl, xlsxBytes, XLSX);
