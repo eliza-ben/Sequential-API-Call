@@ -51,11 +51,26 @@ public class ApiClient {
 
   /** Step3 style: Upload bytes to presigned URL (often PUT). */
   public ResponseEntity<Void> putBytesToPresigned(String presignedUrl, byte[] bytes, MediaType contentType) {
-    return web.put()
-        .uri(presignedUrl)
-        .contentType(contentType)
-        .bodyValue(bytes)
-        .exchangeToMono(resp -> resp.toBodilessEntity())
-        .block();
+
+  // Content-MD5 header value = Base64(MD5(fileBytes))
+  String contentMd5 = base64Md5(bytes);
+
+  return web.put()
+      .uri(presignedUrl)
+      .header("Content-MD5", contentMd5)   // ✅ matches your Postman Step3
+      .contentType(contentType)            // ✅ matches your Postman Step3
+      .bodyValue(bytes)
+      .exchangeToMono(resp -> resp.toBodilessEntity())
+      .block();
+}
+  private static String base64Md5(byte[] bytes) {
+  try {
+    MessageDigest md = MessageDigest.getInstance("MD5");
+    byte[] digest = md.digest(bytes);
+    return Base64.getEncoder().encodeToString(digest);
+  } catch (Exception e) {
+    throw new RuntimeException("Failed to compute MD5", e);
   }
+}
+
 }
