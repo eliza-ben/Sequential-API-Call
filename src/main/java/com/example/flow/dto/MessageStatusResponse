@@ -1,8 +1,0 @@
-package com.example.flow.dto;
-
-public class MessageStatusResponse extends ApiResponseBase {
-  public Data data;
-  public static class Data {
-    public String state;
-  }
-}
