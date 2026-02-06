@@ -44,11 +44,18 @@ public class FlowOrchestratorService {
     this.api = api;
   }
 
-  public FlowResult runAll(byte[] xlsxBytes, String originalFileName) {
+  public FlowResult runAll(byte[] fileBytes, String originalFileName, String contentType) {
 
-    long fileLength = xlsxBytes.length;
-    String contentMD5 = Md5Util.base64Md5(xlsxBytes);
-    String safeFileName = (originalFileName == null || originalFileName.isBlank()) ? "file.xlsx" : originalFileName;
+  long fileLength = fileBytes.length;
+  String contentMD5 = Md5Util.base64Md5(fileBytes);
+  String safeFileName = (originalFileName == null || originalFileName.isBlank()) ? "upload.bin" : originalFileName;
+
+  MediaType mt;
+  try {
+    mt = MediaType.parseMediaType(contentType);
+  } catch (Exception e) {
+    mt = MediaType.APPLICATION_OCTET_STREAM;
+  }
 
     // ===== Step 1 =====
     TokenResponse token = auth.getTokenStrict();
