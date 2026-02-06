@@ -1,6 +1,10 @@
 package com.example.flow.dto;
 
 public class FlowResult {
+ public long fileLength;
+  public String contentMD5;
+  public String originalFileName;
+
   public Long step2GeneratedId;
   public Long fileVersionId;
   public String newFileName;
@@ -10,8 +14,5 @@ public class FlowResult {
 
   public String step6FinalMessageType;
   public String step6FinalMessage;
-public long fileSizeBytes;
-public double fileSizeKB;
-public double fileSizeMB;
 
 }
