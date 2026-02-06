@@ -17,6 +17,12 @@ public class FlowOrchestratorService {
 
   private final AuthTokenService auth;
   private final ApiClient api;
+@Value("${api.step5.post-path}") private String step5PostPath;
+
+@Value("${flow.step5.partner-id}") private Long step5PartnerId;
+@Value("${flow.step5.entity-type:INVOICE}") private String step5EntityType;
+@Value("${flow.step5.action-type:UPLOAD}") private String step5ActionType;
+@Value("${flow.step5.generic-format:true}") private boolean step5GenericFormat;
 
   @Value("${api.base-url}") private String apiBaseUrl;
 
