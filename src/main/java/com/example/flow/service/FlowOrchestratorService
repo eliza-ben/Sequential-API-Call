@@ -49,13 +49,9 @@ public class FlowOrchestratorService {
   long fileLength = fileBytes.length;
   String contentMD5 = Md5Util.base64Md5(fileBytes);
   String safeFileName = (originalFileName == null || originalFileName.isBlank()) ? "upload.bin" : originalFileName;
-
-  MediaType mt;
-  try {
-    mt = MediaType.parseMediaType(contentType);
-  } catch (Exception e) {
-    mt = MediaType.APPLICATION_OCTET_STREAM;
-  }
+  String safeContentType = (contentType == null || contentType.isBlank())
+        ? "application/octet-stream"
+        : contentType;
 
     // ===== Step 1 =====
     TokenResponse token = auth.getTokenStrict();
@@ -66,8 +62,8 @@ public class FlowOrchestratorService {
         apiBaseUrl,
         step2Path,
         accessToken,
-        xlsxBytes,
-        XLSX,
+        fileBytes,
+        safeContentType,
         contentMD5,
         fileLength,
         safeFileName,
@@ -91,8 +87,8 @@ public class FlowOrchestratorService {
     // ===== Step 3 (PUT S3 with headers contentMD5 + file-length) =====
     ResponseEntity<Void> step3 = api.putBytesToPresigned(
         presignedUrl,
-        xlsxBytes,
-        XLSX,
+        fileBytes,
+        safeContentType,
         contentMD5,
         fileLength
     );
