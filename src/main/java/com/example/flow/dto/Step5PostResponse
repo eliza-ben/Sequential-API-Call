@@ -1,0 +1,11 @@
+package com.example.flow.dto;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+public class Step5PostResponse extends ApiResponseBase {
+  public Long generatedId;     // screenshot shows 0
+  public String rowDataType;
+  public JsonNode data;
+  public JsonNode pagination;
+  public JsonNode timeLog;
+}
