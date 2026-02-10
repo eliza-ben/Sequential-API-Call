@@ -1,0 +1,250 @@
+package com.genesis.smb.service;
+
+import com.genesis.smb.dto.invoice.*;
+
+import com.genesis.smb.config.FeeInvoiceProperties;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.genesis.smb.client.FeeInvoiceClient;
+import com.genesis.smb.constants.FeeInvoiceMessageTypes;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.util.Base64;
+
+@Slf4j
+@Service
+public class FeeInvoiceUploadService {
+    private final AuthTokenService auth;
+    private final FeeInvoiceClient api;
+    private final FeeInvoiceProperties props;
+
+    public FeeInvoiceUploadService(FeeInvoiceClient api, FeeInvoiceProperties props, AuthTokenService auth) {
+        this.api = api;
+        this.props = props;
+        this.auth = auth;
+    }
+
+    /**
+     * Complete flow: Step1 -> Step5 .
+     * <p>
+     * Inputs:
+     * - bearerToken: the auth token value WITHOUT "Bearer "
+     * - filePath: local path of file
+     * - contentType: e.g. application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+     * - autoDuplicateFile: query param in Step1
+     * - partnerId: used in Step4 JSON
+     */
+    public ApiEnvelope run(Path filePath, String contentType, boolean autoDuplicateFile, long partnerId)
+            throws Exception {
+
+        byte[] bytes = readAllBytes(filePath);
+        long fileLength = length(bytes);
+        String contentMD5 = md5Base64(bytes);
+        String fileName = filePath.getFileName().toString();
+        log.info("File Length: {} contentMD5: {} fileName{}  ", fileLength, contentMD5, fileName);
+
+        TokenResponse token = auth.getTokenPasswordGrantStrict();
+        String accessToken = token.accessToken;
+        log.info("accessToken: {} ", accessToken);
+
+        // -------------------------
+        // STEP 2: POST bytes + query params -> SUCCESS
+        // -------------------------
+        String presignedUrlPath = props.getCentrlbaseurl() + props.getGetSignedUrlpath();
+        log.info("presignedUrlPath: {} ", presignedUrlPath);
+
+        ApiEnvelope getPresignedUrlApi = api.postBytesWithQuery(
+                presignedUrlPath,
+                accessToken,
+                bytes,
+                contentType,
+                Map.of(
+                        "contentMD5", contentMD5,
+                        "fileLength", fileLength,
+                        "fileName", fileName,
+                        "autoDuplicateFile", autoDuplicateFile
+                ),
+                ApiEnvelope.class
+        );
+
+        requireMessageType(getPresignedUrlApi, FeeInvoiceMessageTypes.SUCCESS);
+
+        GetPresignedUrl getPresignedUrl = extractGetPresignedUrl(getPresignedUrlApi);
+        log.info("getPresignedUrl: {}", getPresignedUrl);
+        // -------------------------
+        // STEP 2: PUT to presigned S3 URL (NO bearer)
+        // Headers: Content-MD5, Content-Length, Content-Type
+        // -------------------------
+        api.putPresignedToS3(
+                getPresignedUrl.getPreSignedUrl(),
+                bytes,
+                contentType,
+                contentMD5,
+                fileLength
+        );
+        log.info("After uploading file to the S3");
+
+        // -------------------------
+        // STEP 3: PUT no body -> SUCCESS
+        // step4Path supports {generatedId} replacement if needed
+        // -------------------------
+        String getUpdateStatusUrl = expandTemplate(props.getCentrlbaseurl() + props.getUpdateFileUoloadPath(),
+                Map.of(
+                        "fileId", String.valueOf(getPresignedUrl.getGeneratedId()),
+                        "fileVersionId", String.valueOf(getPresignedUrl.getFileVersionId())
+                ));
+
+        ApiEnvelope updateFileUpload = api.putNoBodyExpectJson(getUpdateStatusUrl, accessToken, ApiEnvelope.class);
+        requireMessageType(updateFileUpload, FeeInvoiceMessageTypes.SUCCESS);
+
+        // -------------------------
+        // STEP 4: POST JSON -> often PENDING with tracking UUID in 'message'
+        // -------------------------
+        String convertTnvoice = props.getCentrlbaseurl() + props.getCreateInvoicePath();
+
+        CreateInvoiceRequest createInvoiceRequest = new CreateInvoiceRequest(
+                "UPLOAD",
+                "INVOICE",
+                List.of(new CreateInvoiceRequestItem(
+                        true,
+                        Long.parseLong(getPresignedUrl.getFileVersionId()),
+                        partnerId,
+                        fileName
+                ))
+        );
+
+        ApiEnvelope createInvoice = api.postJson(convertTnvoice, accessToken, createInvoiceRequest, ApiEnvelope.class);
+
+        String invoiceUploadId = createInvoice.getMessage();
+        if (invoiceUploadId == null || invoiceUploadId.isBlank()) {
+            throw new IllegalStateException("Step4 did not return trackingId in 'message'. messageType=" + createInvoice.getMessageType());
+        }
+
+        // -------------------------
+        // STEP 5: Poll by trackingId until SUCCESS (or timeout)
+        // Step5 data[0].statusCountMap includes Total/ERROR, etc.
+        // -------------------------
+        return statusPolling(accessToken, invoiceUploadId);
+    }
+
+    private ApiEnvelope statusPolling(String bearerToken, String invoiceUploadId) throws InterruptedException {
+        String pollStatusUrl = expandTemplate(props.getCentrlbaseurl() + props.getPollStatusPath(),
+                Map.of("invoiceUploadId", invoiceUploadId));
+
+        int max = props.getPoll().getMaxAttempts();
+        long sleepMs = props.getPoll().getSleepMillis();
+
+        ApiEnvelope last = null;
+
+        for (int i = 0; i < max; i++) {
+            last = api.getJson(pollStatusUrl, bearerToken, ApiEnvelope.class);
+
+            String mt = last.getMessageType();
+            if (FeeInvoiceMessageTypes.PENDING.equalsIgnoreCase(mt)) {
+                Thread.sleep(sleepMs);
+                continue;
+            }
+
+            if (FeeInvoiceMessageTypes.SUCCESS.equalsIgnoreCase(mt)) {
+                Map<String, Integer> counts = extractStatusCountMap(last);
+
+                // If API shows ERROR > 0, treat as failure
+                int err = counts.getOrDefault("ERROR", 0);
+                if (err > 0) {
+                    throw new IllegalStateException("Step5 finished with ERROR count=" + err + " counts=" + counts + " message=" + last.getMessage());
+                }
+
+                return last;
+            }
+
+            throw new IllegalStateException("Step5 unexpected messageType=" + mt + " message=" + last.getMessage());
+        }
+
+        throw new IllegalStateException("Step5 polling timeout after " + max + " attempts. Last messageType=" +
+                (last == null ? "null" : last.getMessageType()));
+    }
+
+    // ----- Helpers -----
+
+    private static GetPresignedUrl extractGetPresignedUrl(ApiEnvelope env) {
+        long generatedId = env.getGeneratedId() == null ? 0L : env.getGeneratedId();
+        JsonNode data = env.getData();
+        if (data == null || !data.isArray()) {
+            throw new IllegalStateException("Step1 data is missing or not an array");
+        }
+
+        String preSignedUrl = null;
+        Long fileVersionId = null;
+        String newFileName = null;
+
+        for (JsonNode item : data) {
+            if (item.hasNonNull("preSignedURL")) preSignedUrl = item.get("preSignedURL").asText();
+            if (item.hasNonNull("fileVersionId")) fileVersionId = item.get("fileVersionId").asLong();
+            if (item.hasNonNull("newFileName")) newFileName = item.get("newFileName").asText();
+        }
+
+        if (preSignedUrl == null) throw new IllegalStateException("Step1: preSignedURL not found in data[]");
+        if (fileVersionId == null) throw new IllegalStateException("Step1: fileVersionId not found in data[]");
+
+        return new GetPresignedUrl(preSignedUrl, fileVersionId.toString(), newFileName, String.valueOf(generatedId));
+    }
+
+    private static Map<String, Integer> extractStatusCountMap(ApiEnvelope env) {
+        JsonNode data = env.getData();
+        if (data == null || !data.isArray() || data.isEmpty()) return Map.of();
+
+        JsonNode first = data.get(0);
+        JsonNode scm = first.get("statusCountMap");
+        if (scm == null || !scm.isObject()) return Map.of();
+
+        HashMap<String, Integer> out = new HashMap<>();
+        scm.fields().forEachRemaining(e -> out.put(e.getKey(), e.getValue().asInt()));
+        return out;
+    }
+
+    private static void requireMessageType(ApiEnvelope env, String expected) {
+        if (env == null) throw new IllegalStateException("Null response body");
+        String mt = env.getMessageType();
+        if (mt == null || !expected.equalsIgnoreCase(mt)) {
+            throw new IllegalStateException("Unexpected messageType=" + mt + " expected=" + expected + " message=" + env.getMessage());
+        }
+    }
+
+    // Simple template expander for {generatedId} / {trackingId}
+    private static String expandTemplate(String s, Map<String, String> vars) {
+        String out = s;
+        for (var e : vars.entrySet()) {
+            out = out.replace("{" + e.getKey() + "}", e.getValue());
+        }
+        return out;
+    }
+
+    public static byte[] readAllBytes(Path path) throws IOException {
+        return Files.readAllBytes(path);
+    }
+
+    public static long length(byte[] bytes) {
+        return bytes.length;
+    }
+
+    // Many APIs expect Base64(MD5(raw-bytes)) e.g. ogMAWCIhPz5dj8NIXztaTg==
+    public static String md5Base64(byte[] bytes) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(bytes);
+            return Base64.getEncoder().encodeToString(digest);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to compute MD5", e);
+        }
+
+    }
+}
+
+
