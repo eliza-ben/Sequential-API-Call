@@ -1,0 +1,166 @@
+package com.genesis.smb.client;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.ClientResponse;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.UriComponentsBuilder;
+import reactor.core.publisher.Mono;
+
+import com.genesis.smb.constants.FeeInvoiceAPiDefaults;
+import com.genesis.smb.constants.FeeInvoiceApiHeaders;
+
+import java.time.Duration;
+import java.util.Map;
+
+@Slf4j
+@Component
+public class FeeInvoiceClient {
+    private final WebClient web;
+
+    public FeeInvoiceClient(WebClient web) {
+        this.web = web;
+    }
+
+    // Generic exchange for JSON / bytes
+    public <T> T exchange(
+            HttpMethod method,
+            String url,
+            String bearerOrNull,
+            Object bodyOrNull,
+            MediaType contentTypeOrNull,
+            MediaType acceptOrNull,
+            Map<String, ?> queryParamsOrNull,
+            Map<String, String> headersOrNull,
+            Class<T> clazz
+    ) {
+        String finalUrl = withQuery(url, queryParamsOrNull);
+        log.info("finalUrl url {}", finalUrl );
+
+        WebClient.RequestBodySpec spec = web.method(method).uri(finalUrl);
+
+        // Defaults
+        spec.header(FeeInvoiceApiHeaders.CACHE_CONTROL, FeeInvoiceAPiDefaults.NO_CACHE);
+
+        // Bearer auth (Step2/4/5/6)
+        if (bearerOrNull != null && !bearerOrNull.isBlank()) {
+            spec.headers(h -> h.setBearerAuth(bearerOrNull));
+        }
+
+        // Extra headers
+        if (headersOrNull != null) headersOrNull.forEach(spec::header);
+
+        if (acceptOrNull != null) spec.accept(acceptOrNull);
+        if (contentTypeOrNull != null) spec.contentType(contentTypeOrNull);
+
+        Mono<T> mono = (bodyOrNull == null)
+                ? spec.exchangeToMono(resp -> readOrThrow(resp, clazz))
+                : spec.body(BodyInserters.fromValue(bodyOrNull))
+                .exchangeToMono(resp -> readOrThrow(resp, clazz));
+
+        return mono.timeout(Duration.ofSeconds(60)).block();
+    }
+
+    public <T> T getJson(String url, String bearer, Class<T> clazz) {
+        return exchange(HttpMethod.GET, url, bearer, null, null, FeeInvoiceAPiDefaults.JSON, null, null, clazz);
+    }
+
+    public <T> T putNoBodyExpectJson(String url, String bearer, Class<T> clazz) {
+        return exchange(HttpMethod.PUT, url, bearer, null, null, FeeInvoiceAPiDefaults.JSON, null, null, clazz);
+    }
+
+    public <T> T postJson(String url, String bearer, Object body, Class<T> clazz) {
+        return exchange(HttpMethod.POST, url, bearer, body, FeeInvoiceAPiDefaults.JSON, FeeInvoiceAPiDefaults.JSON, null, null, clazz);
+    }
+
+    // Step2: POST raw file bytes with query params (contentMD5, fileLength, fileName, autoDuplicateFile)
+    public <T> T postBytesWithQuery(
+            String url,
+            String bearer,
+            byte[] bytes,
+            String contentType,
+            Map<String, ?> queryParams,
+            Class<T> clazz
+    ) {
+        MediaType mt = parseMediaTypeOrOctet(contentType);
+        log.info("url: {}", url);
+        String encodedUrl = withEncodedQuery(url, queryParams);
+        log.info("encodedUrl: {}", encodedUrl);
+        return exchange(HttpMethod.POST, encodedUrl, bearer, bytes, mt, null, null, null, clazz);
+    }
+
+    // Step3: PUT to presigned S3 URL (NO bearer). Keep headers minimal: Content-MD5, Content-Length, Content-Type.
+    public void putPresignedToS3(
+            String presignedUrl,
+            byte[] bytes,
+            String contentType,
+            String contentMd5Base64,
+            long contentLength
+    ) {
+        MediaType mt = parseMediaTypeOrOctet(contentType);
+        log.info("presigned url {}", presignedUrl );
+        exchange(
+                HttpMethod.PUT,
+                presignedUrl,
+                null,
+                bytes,
+                mt,
+                null,
+                null,
+                Map.of(
+                        FeeInvoiceApiHeaders.CONTENT_MD5, contentMd5Base64,
+                        FeeInvoiceApiHeaders.CONTENT_LENGTH, String.valueOf(contentLength),
+                        FeeInvoiceApiHeaders.CONTENT_TYPE, contentType
+
+                ),
+                Void.class
+        );
+    }
+
+    private static String withQuery(String url, Map<String, ?> query) {
+        if (query == null || query.isEmpty()) return url;
+        UriComponentsBuilder b = UriComponentsBuilder.fromHttpUrl(url);
+        query.forEach(b::queryParam);
+        return b.build(true).toUriString();
+    }
+
+    private static MediaType parseMediaTypeOrOctet(String contentType) {
+        if (contentType == null || contentType.isBlank()) return FeeInvoiceAPiDefaults.OCTET;
+        try {
+            return MediaType.parseMediaType(contentType);
+        } catch (Exception e) {
+            return FeeInvoiceAPiDefaults.OCTET;
+        }
+    }
+
+    private static <T> Mono<T> readOrThrow(ClientResponse resp, Class<T> clazz) {
+        if (resp.statusCode().is2xxSuccessful()) {
+            // Void.class: discard body
+            if (clazz == Void.class) return resp.toBodilessEntity().thenReturn(null);
+            return resp.bodyToMono(clazz);
+        }
+
+        return resp.bodyToMono(String.class)
+                .defaultIfEmpty("")
+                .flatMap(body -> Mono.error(new ApiClientException(
+                        resp.statusCode().value(),
+                        "HTTP " + resp.statusCode().value() + " error: " + body
+                )));
+    }
+
+    private static String withEncodedQuery(String url, Map<String, ?> queryParams) {
+        if (queryParams == null || queryParams.isEmpty()) return url;
+
+        UriComponentsBuilder b = UriComponentsBuilder.fromHttpUrl(url);
+        queryParams.forEach(b::queryParam);
+
+        // IMPORTANT: encode withEncodedQuery () ensures == becomes %3D%3D
+        return b.encode().build().toUriString();
+    }
+
+}
+
