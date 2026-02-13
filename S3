@@ -1,0 +1,50 @@
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.DefaultUriBuilderFactory;
+import reactor.core.publisher.Mono;
+
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+public class S3Put {
+
+    private final WebClient client;
+
+    public S3Put() {
+        DefaultUriBuilderFactory f = new DefaultUriBuilderFactory();
+        f.setEncodingMode(DefaultUriBuilderFactory.EncodingMode.NONE);
+
+        this.client = WebClient.builder()
+                .uriBuilderFactory(f)
+                // Log the ACTUAL request URL + headers WebClient will send
+                .filter(ExchangeFilterFunction.ofRequestProcessor(req -> {
+                    System.out.println("=== ACTUAL REQUEST ===");
+                    System.out.println(req.method() + " " + req.url());
+                    req.headers().forEach((k, v) -> System.out.println(k + ": " + v));
+                    return Mono.just(req);
+                }))
+                .build();
+    }
+
+    public Mono<Void> putPresigned(String presignedUrl, Path file, String base64Md5) {
+        URI uri = URI.create(presignedUrl);
+
+        return Mono.fromCallable(() -> Files.readAllBytes(file))
+                .flatMap(bytes -> client.put()
+                        .uri(uri)  // IMPORTANT: use as-is
+                        // IMPORTANT: host is in SignedHeaders, so set it explicitly
+                        .header(HttpHeaders.HOST, uri.getHost())
+                        // IMPORTANT: send exactly one Content-MD5 header
+                        .header("Content-MD5", base64Md5)
+                        .header(HttpHeaders.CONTENT_LENGTH, String.valueOf(bytes.length))
+                        .contentType(MediaType.APPLICATION_OCTET_STREAM) // safe (not signed)
+                        .bodyValue(bytes)
+                        .retrieve()
+                        .toBodilessEntity()
+                        .then()
+                );
+    }
+}
