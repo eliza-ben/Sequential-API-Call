@@ -4,3 +4,16 @@ java.lang.IllegalStateException: closed
 	at okhttp3.ResponseBody.string(ResponseBody.kt:187) ~[okhttp-4.12.0.jar:na]
 	at com.genesis.smb.service.S3OkHttp.putPresigned(S3OkHttp.java:28) ~[classes/:na]
 	at com.genesis.smb.service.FeeInvoiceUploadService.run(FeeInvoiceUploadService.java:96) ~[classes/:na]
+
+
+
+java.lang.RuntimeException: S3.put Failed:403
+ <?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>SignatureDoesNotMatch</Code><Message>The request signature we calculated does not match the signature you provided. Check your key and signing method.</Message><AWSAccessKeyId>AKIAYEJSAYU2IKMMT6GQ</AWSAccessKeyId><StringToSign>AWS4-HMAC-SHA256
+20260213T204540Z
+20260213/us-west-2/s3/aws4_request
+9086d2a63be8782db34661f0a0c13bb29068c88fecbf35e3d4e1898133f98791</StringToSign><SignatureProvided>6e75e79f43589ea8907d8f48bf1ef511d92a86ad0e921e45355c81dd8784ee0a</SignatureProvided><StringToSignBytes>41 57 53 34 2d 48 4d 41 43 2d 53 48 41 32 35 36 0a 32 30 32 36 30 32 31 33 54 32 30 34 35 34 30 5a 0a 32 30 32 36 30 32 31 33 2f 75 73 2d 77 65 73 74 2d 32 2f 73 33 2f 61 77 73 34 5f 72 65 71 75 65 73 74 0a 39 30 38 36 64 32 61 36 33 62 65 38 37 38 32 64 62 33 34 36 36 31 66 30 61 30 63 31 33 62 62 32 39 30 36 38 63 38 38 66 65 63 62 66 33 35 65 33 64 34 65 31 38 39 38 31 33 33 66 39 38 37 39 31</StringToSignBytes><CanonicalRequest>PUT
+/files/demo/100181/153338/NT_TEST_2.xlsx
+X-Amz-Algorithm=AWS4-HMAC-SHA256&amp;X-Amz-Credential=AKIAYEJSAYU2IKMMT6GQ%2F20260213%2Fus-west-2%2Fs3%2Faws4_request&amp;X-Amz-Date=20260213T204540Z&amp;X-Amz-Expires=604800&amp;X-Amz-SignedHeaders=content-md5%3Bhost
+content-md5:OgMAWCUhPz5dj8NJXztaTg==
+host:jw3frab4s4ghupkx.s3.us-west-2.amazonaws.com
