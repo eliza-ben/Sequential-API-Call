@@ -1,0 +1,6 @@
+java.lang.IllegalStateException: closed
+	at okio.RealBufferedSource.select(RealBufferedSource.kt:221) ~[okio-jvm-3.6.0.jar:na]
+	at okhttp3.internal.Util.readBomAsCharset(Util.kt:265) ~[okhttp-4.12.0.jar:na]
+	at okhttp3.ResponseBody.string(ResponseBody.kt:187) ~[okhttp-4.12.0.jar:na]
+	at com.genesis.smb.service.S3OkHttp.putPresigned(S3OkHttp.java:28) ~[classes/:na]
+	at com.genesis.smb.service.FeeInvoiceUploadService.run(FeeInvoiceUploadService.java:96) ~[classes/:na]
