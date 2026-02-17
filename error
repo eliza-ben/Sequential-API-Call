@@ -17,3 +17,15 @@ java.lang.RuntimeException: S3.put Failed:403
 X-Amz-Algorithm=AWS4-HMAC-SHA256&amp;X-Amz-Credential=AKIAYEJSAYU2IKMMT6GQ%2F20260213%2Fus-west-2%2Fs3%2Faws4_request&amp;X-Amz-Date=20260213T204540Z&amp;X-Amz-Expires=604800&amp;X-Amz-SignedHeaders=content-md5%3Bhost
 content-md5:OgMAWCUhPz5dj8NJXztaTg==
 host:jw3frab4s4ghupkx.s3.us-west-2.amazonaws.com
+
+
+
+String from postman response 
+https://jw3frab4s4ghupkx.s3.us-west-2.amazonaws.com/files/demo/100181/153454/Bank_of_New_York_Sub_Custody_NT_e%281%29.xlsx?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260217T185355Z&X-Amz-SignedHeaders=content-md5%3Bhost&X-Amz-Expires=604800&X-Amz-Credential=AKIAYEJSAYU2IKMMT6GQ%2F20260217%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Signature=43c377ab145ff56c174864144b2ea9b066b87d946088c9125fb4097320bffbdb
+
+API Response postman response 
+
+ data: [{"preSignedURL":"https://jw3frab4s4ghupkx.s3.us-west-2.amazonaws.com/files/demo/100181/153455/Bank_of_New_York_Sub_Custody_NT_f.xlsx?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260217T190240Z&X-Amz-SignedHeaders=content-md5%3Bhost&X-Amz-Expires=604800&X-Amz-Credential=AKIAYEJSAYU2IKMMT6GQ%2F20260217%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Signature=1b19691cf2f0a3459f7618885a3557ef21d0eaf49a8ffaafd6bcee002baccc73"},{"fileVersionId":153455}]
+
+String 
+https://jw3frab4s4ghupkx.s3.us-west-2.amazonaws.com/files/demo/100181/153455/Bank_of_New_York_Sub_Custody_NT_f.xlsx?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260217T190240Z&X-Amz-SignedHeaders=content-md5%3Bhost&X-Amz-Expires=604800&X-Amz-Credential=AKIAYEJSAYU2IKMMT6GQ%2F20260217%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Signature=1b19691cf2f0a3459f7618885a3557ef21d0eaf49a8ffaafd6bcee002baccc73
