@@ -29,3 +29,20 @@ API Response postman response
 
 String 
 https://jw3frab4s4ghupkx.s3.us-west-2.amazonaws.com/files/demo/100181/153455/Bank_of_New_York_Sub_Custody_NT_f.xlsx?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260217T190240Z&X-Amz-SignedHeaders=content-md5%3Bhost&X-Amz-Expires=604800&X-Amz-Credential=AKIAYEJSAYU2IKMMT6GQ%2F20260217%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Signature=1b19691cf2f0a3459f7618885a3557ef21d0eaf49a8ffaafd6bcee002baccc73
+
+
+
+
+Step 2 Url 
+https://XXX.net/WebService/file?contentMD5=OgMAWCUhPz5dj8NJXztaTg%3D%3D&fileLength=126932&autoDuplicateFile=true&fileName=Bank_of_New_York_Sub_Custody_NT_i.xlsx
+no headers 
+
+Presigned Url 
+https://jw3frab4s4ghupkx.s3.us-west-2.amazonaws.com/files/demo/100181/153517/Bank_of_New_York_Sub_Custody_NT_i.xlsx?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260218T132346Z&X-Amz-SignedHeaders=content-md5%3Bhost&X-Amz-Expires=604800&X-Amz-Credential=AKIAYEJSAYU2IKMMT6GQ%2F20260218%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Signature=16c07695540376d806873f9a39ba4697016196e29f8077ede169b95b5ea24318
+
+https://jw3frab4s4ghupkx.s3.us-west-2.amazonaws.com/files/demo/100181/153517/Bank_of_New_York_Sub_Custody_NT_i.xlsx?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260218T132346Z&X-Amz-SignedHeaders=content-md5%3Bhost&X-Amz-Expires=604800&X-Amz-Credential=AKIAYEJSAYU2IKMMT6GQ%2F20260218%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Signature=16c07695540376d806873f9a39ba4697016196e29f8077ede169b95b5ea24318
+/files/demo/100181/153517/Bank_of_New_York_Sub_Custody_NT_i.xlsx
+X-Amz-Algorithm=AWS4-HMAC-SHA256&amp;X-Amz-Credential=AKIAYEJSAYU2IKMMT6GQ%2F20260218%2Fus-west-2%2Fs3%2Faws4_request&amp;X-Amz-Date=20260218T132346Z&amp;X-Amz-Expires=604800&amp;X-Amz-SignedHeaders=content-md5%3Bhost
+content-md5:OgMAWCUhPz5dj8NJXztaTg==
+host:jw3frab4s4ghupkx.s3.us-west-2.amazonaws.com
+
