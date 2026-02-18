@@ -29,6 +29,50 @@ public class S3Put {
                 .build();
     }
 
+    public void uploadUrl(String presignedUrl, Path file, String contentMd5, String contentType) throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create(presignedUrl))
+                .header(HttpHeaders.CONTENT_TYPE, contentType)
+                .header("Content-MD5", contentMd5.trim())
+                .PUT(HttpRequest.BodyPublishers.ofFile(file))
+                .build();
+
+        log.info("Sending request to {}, {} ",presignedUrl, contentMd5.trim());
+        log.info("Request Header Map {} ",httpRequest.headers().map());
+
+        HttpResponse<String> response = client.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        if(response.statusCode() == 200) {
+            System.out.println("Upload Success");
+        }else{
+            System.out.println("Upload Failed "+response.statusCode());
+            System.out.println("Error "+ response.body());
+
+        }
+    }
+    public void uploadUrl(String presignedUrl, Path file, String contentMd5, String contentType) throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create(presignedUrl))
+                .header(HttpHeaders.CONTENT_TYPE, contentType)
+                .header("Content-MD5", contentMd5.trim())
+                .PUT(HttpRequest.BodyPublishers.ofFile(file))
+                .build();
+
+        log.info("Sending request to {}, {} ",presignedUrl, contentMd5.trim());
+        log.info("Request Header Map {} ",httpRequest.headers().map());
+
+        HttpResponse<String> response = client.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        if(response.statusCode() == 200) {
+            System.out.println("Upload Success");
+        }else{
+            System.out.println("Upload Failed "+response.statusCode());
+            System.out.println("Error "+ response.body());
+
+        }
+    }
+
+
     public Mono<Void> putPresigned(String presignedUrl, Path file, String base64Md5) {
         URI uri = URI.create(presignedUrl);
 
