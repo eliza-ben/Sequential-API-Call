@@ -1,37 +1,181 @@
- public <T> T exchange(
-            HttpMethod method,
-            String url,
-            String bearerOrNull,
-            Object bodyOrNull,
-            MediaType contentTypeOrNull,
-            MediaType acceptOrNull,
-            Map<String, ?> queryParamsOrNull,
-            Map<String, String> headersOrNull,
-            Class<T> clazz
-    ) {
-        String finalUrl = withQuery(url, queryParamsOrNull);
-        log.info("finalUrl url {}", finalUrl);
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
-        WebClient.RequestBodySpec spec = web.method(method).uri(finalUrl);
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.Base64;
 
-        // Defaults
-        spec.header(FeeInvoiceApiHeaders.CACHE_CONTROL, FeeInvoiceAPiDefaults.NO_CACHE);
+public class PresignFlow {
 
-        // Bearer auth (Step2/4/5/6)
-        if (bearerOrNull != null && !bearerOrNull.isBlank()) {
-            spec.headers(h -> h.setBearerAuth(bearerOrNull));
+    /**
+     * Returned values you said you need:
+     * - generatedId (root-level in your screenshot)
+     * - fileVersionId (data[0].fileVersionId in your screenshot)
+     * Plus: preSignedUrl, newFileName, raw step2 response, status codes.
+     */
+    public record PresignUploadResponse(
+            String preSignedUrl,
+            String generatedId,
+            String fileVersionId,
+            String newFileName,
+            int step2Status,
+            String step2ResponseBody,
+            int uploadStatus,
+            String uploadResponseBody
+    ) {}
+
+    /**
+     * Step 2: call your presign endpoint with query params (fileLength, contentMD5, fileName, autoDuplicateFile)
+     * Step 3: PUT bytes to the returned S3 presigned URL.
+     *
+     * NOTE: If your S3 presigned URL "SignedHeaders" does NOT include content-type, set sendContentTypeOnPut=false.
+     */
+    public static PresignUploadResponse getPresignedUrlAndUpload(
+            URI presignApiBaseUri,          // Step 2 endpoint
+            String bearerToken,             // access token (with or without "Bearer ")
+            Path file,                      // local file to upload
+            String fileNameForServer,       // fileName query param for Step 2
+            boolean autoDuplicateFile,      // autoDuplicateFile query param for Step 2
+            String contentType,             // e.g. application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+            boolean sendContentTypeOnPut    // set false if SignatureDoesNotMatch and CT not signed
+    ) throws Exception {
+
+        HttpClient client = HttpClient.newHttpClient();
+        ObjectMapper om = new ObjectMapper();
+
+        // ---- Read file bytes once ----
+        byte[] bytes = Files.readAllBytes(file);
+        long fileLength = bytes.length;
+
+        // ---- Compute base64(MD5(bytes)) ----
+        MessageDigest md5 = MessageDigest.getInstance("MD5");
+        String contentMd5Base64 = Base64.getEncoder().encodeToString(md5.digest(bytes));
+
+        // ---- Build Step 2 URL with query params ----
+        String q = "fileLength=" + fileLength
+                + "&contentMD5=" + URLEncoder.encode(contentMd5Base64, StandardCharsets.UTF_8)
+                + "&fileName=" + URLEncoder.encode(fileNameForServer, StandardCharsets.UTF_8)
+                + "&autoDuplicateFile=" + autoDuplicateFile;
+
+        URI presignUri = URI.create(presignApiBaseUri.toString()
+                + (presignApiBaseUri.toString().contains("?") ? "&" : "?")
+                + q);
+
+        // ---- Authorization header (accept raw token or already prefixed) ----
+        String auth = bearerToken == null ? "" : bearerToken.trim();
+        if (!auth.toLowerCase().startsWith("bearer ")) {
+            auth = "Bearer " + auth;
         }
 
-        // Extra headers
-        if (headersOrNull != null) headersOrNull.forEach(spec::header);
+        // ---- Step 2: POST to get presigned URL + ids ----
+        HttpRequest presignReq = HttpRequest.newBuilder()
+                .uri(presignUri)
+                .header("Authorization", auth)
+                .header("Accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.noBody()) // change to .GET() if your API is GET
+                .build();
 
-        if (acceptOrNull != null) spec.accept(acceptOrNull);
-        if (contentTypeOrNull != null) spec.contentType(contentTypeOrNull);
+        HttpResponse<String> presignResp = client.send(presignReq, HttpResponse.BodyHandlers.ofString());
+        int step2Status = presignResp.statusCode();
+        String step2Body = presignResp.body();
 
-        Mono<T> mono = (bodyOrNull == null)
-                ? spec.exchangeToMono(resp -> readOrThrow(resp, clazz))
-                : spec.body(BodyInserters.fromValue(bodyOrNull))
-                .exchangeToMono(resp -> readOrThrow(resp, clazz));
+        if (step2Status < 200 || step2Status >= 300) {
+            throw new RuntimeException("Presign API failed: " + step2Status + " body=" + step2Body);
+        }
 
-        return mono.timeout(Duration.ofSeconds(60)).block();
+        // ---- Parse Step 2 response ----
+        JsonNode root = om.readTree(step2Body);
+
+        // generatedId is root-level in your screenshot (e.g. "generatedId": 153384)
+        String generatedId = asString(root.get("generatedId"));
+
+        String preSignedUrl = null;
+        String fileVersionId = null;
+        String newFileName = null;
+
+        // Your screenshot: data: [ { preSignedURL: "...", fileVersionId: 152874, newFileName: "..." } ]
+        JsonNode dataNode = root.path("data");
+        if (dataNode.isArray() && dataNode.size() > 0) {
+            JsonNode first = dataNode.get(0);
+
+            preSignedUrl =
+                    first.hasNonNull("preSignedURL") ? asString(first.get("preSignedURL")) :
+                    first.hasNonNull("preSignedUrl") ? asString(first.get("preSignedUrl")) :
+                    first.hasNonNull("presignedUrl") ? asString(first.get("presignedUrl")) :
+                    null;
+
+            fileVersionId =
+                    first.hasNonNull("fileVersionId") ? asString(first.get("fileVersionId")) :
+                    first.hasNonNull("fileVersionID") ? asString(first.get("fileVersionID")) :
+                    null;
+
+            newFileName = first.hasNonNull("newFileName") ? asString(first.get("newFileName")) : null;
+
+            // Sometimes APIs also put generatedId here (fallback)
+            if ((generatedId == null || generatedId.isBlank()) && first.hasNonNull("generatedId")) {
+                generatedId = asString(first.get("generatedId"));
+            }
+        }
+
+        // Fallback shapes (just in case API changes)
+        if (preSignedUrl == null && root.hasNonNull("preSignedURL")) preSignedUrl = asString(root.get("preSignedURL"));
+        if (preSignedUrl == null && root.hasNonNull("preSignedUrl")) preSignedUrl = asString(root.get("preSignedUrl"));
+        if (preSignedUrl == null && root.hasNonNull("presignedUrl")) preSignedUrl = asString(root.get("presignedUrl"));
+
+        if (preSignedUrl == null || preSignedUrl.isBlank()) {
+            throw new RuntimeException("Could not find preSignedURL in response JSON: " + step2Body);
+        }
+        if (fileVersionId == null || fileVersionId.isBlank()) {
+            throw new RuntimeException("Could not find fileVersionId in response JSON: " + step2Body);
+        }
+        if (generatedId == null || generatedId.isBlank()) {
+            throw new RuntimeException("Could not find generatedId in response JSON: " + step2Body);
+        }
+
+        // ---- Step 3: PUT upload to S3 presigned URL ----
+        HttpRequest.Builder putBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(preSignedUrl))
+                .header("Content-MD5", contentMd5Base64.trim())
+                .PUT(HttpRequest.BodyPublishers.ofByteArray(bytes));
+
+        // Only send Content-Type if it was part of the signed headers
+        if (sendContentTypeOnPut && contentType != null && !contentType.isBlank()) {
+            putBuilder.header("Content-Type", contentType);
+        }
+
+        HttpResponse<String> putResp = client.send(putBuilder.build(), HttpResponse.BodyHandlers.ofString());
+        int uploadStatus = putResp.statusCode();
+        String uploadBody = putResp.body();
+
+        // S3 presigned PUT often returns 200 or 204
+        if (uploadStatus != 200 && uploadStatus != 204) {
+            throw new RuntimeException("Upload failed: " + uploadStatus + " body=" + uploadBody);
+        }
+
+        return new PresignUploadResponse(
+                preSignedUrl,
+                generatedId,
+                fileVersionId,
+                newFileName,
+                step2Status,
+                step2Body,
+                uploadStatus,
+                uploadBody
+        );
     }
+
+    /**
+     * Converts JSON values to String reliably (works for numeric + text nodes).
+     */
+    private static String asString(JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        return node.asText(); // numeric nodes become "152874", etc.
+    }
+}
