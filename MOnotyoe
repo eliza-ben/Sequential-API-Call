@@ -1,0 +1,37 @@
+ public <T> T exchange(
+            HttpMethod method,
+            String url,
+            String bearerOrNull,
+            Object bodyOrNull,
+            MediaType contentTypeOrNull,
+            MediaType acceptOrNull,
+            Map<String, ?> queryParamsOrNull,
+            Map<String, String> headersOrNull,
+            Class<T> clazz
+    ) {
+        String finalUrl = withQuery(url, queryParamsOrNull);
+        log.info("finalUrl url {}", finalUrl);
+
+        WebClient.RequestBodySpec spec = web.method(method).uri(finalUrl);
+
+        // Defaults
+        spec.header(FeeInvoiceApiHeaders.CACHE_CONTROL, FeeInvoiceAPiDefaults.NO_CACHE);
+
+        // Bearer auth (Step2/4/5/6)
+        if (bearerOrNull != null && !bearerOrNull.isBlank()) {
+            spec.headers(h -> h.setBearerAuth(bearerOrNull));
+        }
+
+        // Extra headers
+        if (headersOrNull != null) headersOrNull.forEach(spec::header);
+
+        if (acceptOrNull != null) spec.accept(acceptOrNull);
+        if (contentTypeOrNull != null) spec.contentType(contentTypeOrNull);
+
+        Mono<T> mono = (bodyOrNull == null)
+                ? spec.exchangeToMono(resp -> readOrThrow(resp, clazz))
+                : spec.body(BodyInserters.fromValue(bodyOrNull))
+                .exchangeToMono(resp -> readOrThrow(resp, clazz));
+
+        return mono.timeout(Duration.ofSeconds(60)).block();
+    }
