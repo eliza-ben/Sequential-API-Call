@@ -1,0 +1,182 @@
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.*;
+
+import reactor.core.publisher.Mono;
+
+class ApiClientUnitTest {
+
+    // Helper DTO for success response
+    public static class HelloResponse {
+        public String message;
+        public HelloResponse() {}
+        public HelloResponse(String message) { this.message = message; }
+    }
+
+    @Test
+    void callApi_buildsQuery_setsBearer_cacheControl_accept_andReturnsBody() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+
+        WebClient web = WebClient.builder()
+                .exchangeFunction(req -> {
+                    captured.set(req);
+
+                    // Return 200 JSON
+                    String json = "{\"message\":\"ok\"}";
+                    ClientResponse resp = ClientResponse
+                            .create(HttpStatus.OK)
+                            .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                            .body(json)
+                            .build();
+
+                    return Mono.just(resp);
+                })
+                .build();
+
+        ApiClient api = new ApiClient(web);
+
+        HelloResponse out = api.callApi(
+                HttpMethod.GET,
+                "https://example.com/api/items",
+                "MY_TOKEN",
+                null,
+                "application/json",
+                Map.of("q", "hello world", "page", 2),
+                Map.of("X-Custom", "abc"),
+                HelloResponse.class
+        );
+
+        assertNotNull(out);
+        assertEquals("ok", out.message);
+
+        ClientRequest req = captured.get();
+        assertNotNull(req);
+
+        // URL contains encoded query params
+        String url = req.url().toString();
+        assertTrue(url.startsWith("https://example.com/api/items?"));
+        assertTrue(url.contains("q=hello%20world"));
+        assertTrue(url.contains("page=2"));
+
+        // Headers
+        HttpHeaders h = req.headers();
+        assertEquals("no-cache", h.getFirst(ApiConstants.CACHE_CONTROL)); // your constants
+        assertEquals("Bearer MY_TOKEN", h.getFirst(HttpHeaders.AUTHORIZATION));
+        assertEquals("abc", h.getFirst("X-Custom"));
+
+        // Accept is set by callApi to ApiConstants.JSON
+        assertTrue(h.getAccept().contains(ApiConstants.JSON));
+    }
+
+    @Test
+    void exchange_whenNon2xx_throwsApiClientExceptionWithStatusAndBody() {
+        WebClient web = WebClient.builder()
+                .exchangeFunction(req -> {
+                    ClientResponse resp = ClientResponse
+                            .create(HttpStatus.BAD_REQUEST)
+                            .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_PLAIN_VALUE)
+                            .body("bad things happened")
+                            .build();
+                    return Mono.just(resp);
+                })
+                .build();
+
+        ApiClient api = new ApiClient(web);
+
+        ApiClientException ex = assertThrows(ApiClientException.class, () ->
+                api.exchange(
+                        HttpMethod.GET,
+                        "https://example.com/fail",
+                        "TOKEN",
+                        null,
+                        null,
+                        MediaType.APPLICATION_JSON,
+                        null,
+                        null,
+                        String.class
+                )
+        );
+
+        assertEquals(400, ex.getStatusCode()); // adjust getter if different
+        assertTrue(ex.getMessage().contains("HTTP 400 error"));
+        assertTrue(ex.getMessage().contains("bad things happened"));
+    }
+
+    @Test
+    void callApi_invalidContentType_fallsBackToOctetStream() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+
+        WebClient web = WebClient.builder()
+                .exchangeFunction(req -> {
+                    captured.set(req);
+
+                    ClientResponse resp = ClientResponse
+                            .create(HttpStatus.OK)
+                            .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                            .body("{\"message\":\"ok\"}")
+                            .build();
+
+                    return Mono.just(resp);
+                })
+                .build();
+
+        ApiClient api = new ApiClient(web);
+
+        api.callApi(
+                HttpMethod.POST,
+                "https://example.com/ct",
+                "TOKEN",
+                Map.of("a", 1),
+                "not/a-real-media-type;;;;",
+                null,
+                null,
+                HelloResponse.class
+        );
+
+        ClientRequest req = captured.get();
+        assertNotNull(req);
+
+        // Content-Type should fall back to octet-stream (your ApiConstants.OCTET)
+        assertEquals(ApiConstants.OCTET, req.headers().getContentType());
+    }
+
+    @Test
+    void exchange_whenClazzVoid_returnsNull_on2xx() {
+        WebClient web = WebClient.builder()
+                .exchangeFunction(req -> {
+                    ClientResponse resp = ClientResponse
+                            .create(HttpStatus.NO_CONTENT)
+                            .build();
+                    return Mono.just(resp);
+                })
+                .build();
+
+        ApiClient api = new ApiClient(web);
+
+        Void out = api.exchange(
+                HttpMethod.DELETE,
+                "https://example.com/delete",
+                "TOKEN",
+                null,
+                null,
+                null,
+                null,
+                null,
+                Void.class
+        );
+
+        assertNull(out);
+    }
+}
