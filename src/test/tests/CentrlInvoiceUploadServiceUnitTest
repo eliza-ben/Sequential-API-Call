@@ -1,0 +1,276 @@
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.net.URI;
+import java.nio.file.Path;
+import java.util.Map;
+
+@ExtendWith(MockitoExtension.class)
+class CentrlInvoiceUploadServiceUnitTest {
+
+    private ApiClient api;
+    private CentrlInvoiceProperties props;
+    private AuthTokenService auth;
+    private CentrlPresignUploadService presignUploadService;
+
+    private CentrlInvoiceUploadService service;
+
+    private final ObjectMapper om = new ObjectMapper();
+
+    @BeforeEach
+    void setup() {
+        api = mock(ApiClient.class);
+        props = mock(CentrlInvoiceProperties.class);
+        auth = mock(AuthTokenService.class);
+        presignUploadService = mock(CentrlPresignUploadService.class);
+
+        service = new CentrlInvoiceUploadService(api, props, auth, presignUploadService);
+
+        // Common properties used by run()
+        when(props.getCentrlbaseurl()).thenReturn("https://centrl.example");
+        when(props.getGetSignedUrlpath()).thenReturn("/files/presign");
+        when(props.getUpdateFileUoloadPath()).thenReturn("/files/{fileId}/{fileVersionId}/status/{fileUploadStatus}");
+        when(props.getCreateInvoicePath()).thenReturn("/invoice/create");
+        when(props.getPollStatusPath()).thenReturn("/invoice/status/{invoiceUploadId}");
+
+        // Poll config
+        var pollProps = mock(CentrlInvoiceProperties.PollProperties.class);
+        when(props.getPoll()).thenReturn(pollProps);
+        when(pollProps.getMaxAttempts()).thenReturn(3);
+        when(pollProps.getSleepMillis()).thenReturn(0L); // keep tests fast
+    }
+
+    @Test
+    void run_happyPath_pendingThenSuccess_returnsSuccessResponse() throws Exception {
+        Path filePath = Path.of("/tmp/invoice.xlsx");
+        String fileName = "invoice.xlsx";
+        long partnerId = 777L;
+
+        // Step 0: token
+        TokenResponse token = new TokenResponse();
+        token.accessToken = "ACCESS_TOKEN";
+        when(auth.getTokenPasswordGrantStrict()).thenReturn(token);
+
+        // Step 1&2: presign + upload
+        PresignedUploadResult presigned = mock(PresignedUploadResult.class);
+        when(presigned.getGeneratedId()).thenReturn("1001");
+        when(presigned.getFileVersionId()).thenReturn("2002");
+
+        ArgumentCaptor<URI> presignUri = ArgumentCaptor.forClass(URI.class);
+
+        when(presignUploadService.presignAndUpload(
+                presignUri.capture(),
+                eq("ACCESS_TOKEN"),
+                eq(filePath),
+                eq(fileName),
+                eq(true),
+                eq(false),
+                eq("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        )).thenReturn(presigned);
+
+        // Step 3: update status (must be SUCCESS)
+        ApiEnvelope updateEnv = mock(ApiEnvelope.class);
+        when(updateEnv.getMessageType()).thenReturn(ApiConstants.SUCCESS);
+        when(api.callApi(eq(HttpMethod.PUT), anyString(), eq("ACCESS_TOKEN"),
+                isNull(), isNull(), isNull(), isNull(), eq(ApiEnvelope.class)))
+                .thenReturn(updateEnv);
+
+        // Step 4: create invoice (must return message=trackingId)
+        ApiEnvelope createEnv = mock(ApiEnvelope.class);
+        when(createEnv.getMessageType()).thenReturn(ApiConstants.SUCCESS);
+        when(createEnv.getMessage()).thenReturn("TRACK-123");
+
+        // capture request body to verify partnerId/fileName/versionId
+        ArgumentCaptor<Object> bodyCaptor = ArgumentCaptor.forClass(Object.class);
+
+        when(api.callApi(eq(HttpMethod.POST), anyString(), eq("ACCESS_TOKEN"),
+                bodyCaptor.capture(), isNull(), isNull(), isNull(), eq(ApiEnvelope.class)))
+                .thenReturn(createEnv);
+
+        // Step 5: poll -> PENDING then SUCCESS with ERROR=0
+        ApiEnvelope pollPending = mock(ApiEnvelope.class);
+        when(pollPending.getMessageType()).thenReturn(ApiConstants.PENDING);
+
+        ApiEnvelope pollSuccess = mock(ApiEnvelope.class);
+        when(pollSuccess.getMessageType()).thenReturn(ApiConstants.SUCCESS);
+        when(pollSuccess.getData()).thenReturn(pollDataWithStatusCount(Map.of("ERROR", 0)));
+
+        // api.callApi(GET ...) will be invoked during polling
+        when(api.callApi(eq(HttpMethod.GET), contains("/invoice/status/"), eq("ACCESS_TOKEN"),
+                isNull(), isNull(), isNull(), isNull(), eq(ApiEnvelope.class)))
+                .thenReturn(pollPending, pollSuccess);
+
+        // Act
+        CentrlInvoiceResponse resp = service.run(filePath, fileName, partnerId);
+
+        // Assert response
+        assertNotNull(resp);
+        // Adjust these depending on your CentrlInvoiceResponse shape
+        assertEquals(fileName, resp.fileName());   // if record
+        assertEquals("SUCCESS", resp.status());    // if record
+
+        // Assert presign URL built correctly
+        assertEquals(URI.create("https://centrl.example/files/presign"), presignUri.getValue());
+
+        // Assert Step 3 URL expansion contains generatedId and fileVersionId and status=true
+        verify(api).callApi(eq(HttpMethod.PUT),
+                argThat(url -> url.contains("/files/1001/2002/status/true")),
+                eq("ACCESS_TOKEN"),
+                isNull(), isNull(), isNull(), isNull(),
+                eq(ApiEnvelope.class));
+
+        // Assert Step 4 body includes the essentials (best-effort without depending on equals())
+        Object body = bodyCaptor.getValue();
+        assertNotNull(body);
+        assertTrue(body instanceof CreateInvoiceRequest);
+
+        CreateInvoiceRequest req = (CreateInvoiceRequest) body;
+        assertEquals("UPLOAD", req.getUploadType());     // adjust getter names
+        assertEquals("INVOICE", req.getDocType());
+        assertEquals(1, req.getItems().size());
+        CreateInvoiceRequestItem item = req.getItems().get(0);
+        assertEquals(true, item.isActive());
+        assertEquals(2002L, item.getFileVersionId());
+        assertEquals(partnerId, item.getPartnerId());
+        assertEquals(fileName, item.getFileName());
+
+        // Poll called at least twice
+        verify(api, times(2)).callApi(eq(HttpMethod.GET), anyString(), eq("ACCESS_TOKEN"),
+                isNull(), isNull(), isNull(), isNull(), eq(ApiEnvelope.class));
+    }
+
+    @Test
+    void run_step4MissingTrackingId_throwsIllegalState() throws Exception {
+        Path filePath = Path.of("/tmp/invoice.xlsx");
+
+        TokenResponse token = new TokenResponse();
+        token.accessToken = "T";
+        when(auth.getTokenPasswordGrantStrict()).thenReturn(token);
+
+        PresignedUploadResult presigned = mock(PresignedUploadResult.class);
+        when(presigned.getGeneratedId()).thenReturn("1");
+        when(presigned.getFileVersionId()).thenReturn("2");
+        when(presignUploadService.presignAndUpload(any(), anyString(), any(), anyString(), anyBoolean(), anyBoolean(), anyString()))
+                .thenReturn(presigned);
+
+        ApiEnvelope updateEnv = mock(ApiEnvelope.class);
+        when(updateEnv.getMessageType()).thenReturn(ApiConstants.SUCCESS);
+        when(api.callApi(eq(HttpMethod.PUT), anyString(), anyString(), any(), any(), any(), any(), eq(ApiEnvelope.class)))
+                .thenReturn(updateEnv);
+
+        ApiEnvelope createEnv = mock(ApiEnvelope.class);
+        when(createEnv.getMessageType()).thenReturn(ApiConstants.SUCCESS);
+        when(createEnv.getMessage()).thenReturn("   "); // blank trackingId
+        when(api.callApi(eq(HttpMethod.POST), anyString(), anyString(), any(), any(), any(), any(), eq(ApiEnvelope.class)))
+                .thenReturn(createEnv);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> service.run(filePath, "invoice.xlsx", 9L));
+
+        assertTrue(ex.getMessage().contains("Step4 did not return trackingId"));
+    }
+
+    @Test
+    void run_pollSuccessWithErrorCountGreaterThan1_throwsIllegalState() throws Exception {
+        Path filePath = Path.of("/tmp/invoice.xlsx");
+
+        TokenResponse token = new TokenResponse();
+        token.accessToken = "T";
+        when(auth.getTokenPasswordGrantStrict()).thenReturn(token);
+
+        PresignedUploadResult presigned = mock(PresignedUploadResult.class);
+        when(presigned.getGeneratedId()).thenReturn("1");
+        when(presigned.getFileVersionId()).thenReturn("2");
+        when(presignUploadService.presignAndUpload(any(), anyString(), any(), anyString(), anyBoolean(), anyBoolean(), anyString()))
+                .thenReturn(presigned);
+
+        ApiEnvelope updateEnv = mock(ApiEnvelope.class);
+        when(updateEnv.getMessageType()).thenReturn(ApiConstants.SUCCESS);
+        when(api.callApi(eq(HttpMethod.PUT), anyString(), anyString(), any(), any(), any(), any(), eq(ApiEnvelope.class)))
+                .thenReturn(updateEnv);
+
+        ApiEnvelope createEnv = mock(ApiEnvelope.class);
+        when(createEnv.getMessageType()).thenReturn(ApiConstants.SUCCESS);
+        when(createEnv.getMessage()).thenReturn("TRACK");
+        when(api.callApi(eq(HttpMethod.POST), anyString(), anyString(), any(), any(), any(), any(), eq(ApiEnvelope.class)))
+                .thenReturn(createEnv);
+
+        ApiEnvelope pollSuccess = mock(ApiEnvelope.class);
+        when(pollSuccess.getMessageType()).thenReturn(ApiConstants.SUCCESS);
+        when(pollSuccess.getData()).thenReturn(pollDataWithStatusCount(Map.of("ERROR", 2)));
+
+        when(api.callApi(eq(HttpMethod.GET), anyString(), anyString(), any(), any(), any(), any(), eq(ApiEnvelope.class)))
+                .thenReturn(pollSuccess);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> service.run(filePath, "invoice.xlsx", 9L));
+
+        assertTrue(ex.getMessage().contains("finished with ERROR count=2"));
+    }
+
+    @Test
+    void run_pollingTimeout_throwsIllegalState() throws Exception {
+        // make maxAttempts small and always PENDING
+        var pollProps = props.getPoll();
+        when(pollProps.getMaxAttempts()).thenReturn(2);
+        when(pollProps.getSleepMillis()).thenReturn(0L);
+
+        Path filePath = Path.of("/tmp/invoice.xlsx");
+
+        TokenResponse token = new TokenResponse();
+        token.accessToken = "T";
+        when(auth.getTokenPasswordGrantStrict()).thenReturn(token);
+
+        PresignedUploadResult presigned = mock(PresignedUploadResult.class);
+        when(presigned.getGeneratedId()).thenReturn("1");
+        when(presigned.getFileVersionId()).thenReturn("2");
+        when(presignUploadService.presignAndUpload(any(), anyString(), any(), anyString(), anyBoolean(), anyBoolean(), anyString()))
+                .thenReturn(presigned);
+
+        ApiEnvelope updateEnv = mock(ApiEnvelope.class);
+        when(updateEnv.getMessageType()).thenReturn(ApiConstants.SUCCESS);
+        when(api.callApi(eq(HttpMethod.PUT), anyString(), anyString(), any(), any(), any(), any(), eq(ApiEnvelope.class)))
+                .thenReturn(updateEnv);
+
+        ApiEnvelope createEnv = mock(ApiEnvelope.class);
+        when(createEnv.getMessageType()).thenReturn(ApiConstants.SUCCESS);
+        when(createEnv.getMessage()).thenReturn("TRACK");
+        when(api.callApi(eq(HttpMethod.POST), anyString(), anyString(), any(), any(), any(), any(), eq(ApiEnvelope.class)))
+                .thenReturn(createEnv);
+
+        ApiEnvelope pollPending = mock(ApiEnvelope.class);
+        when(pollPending.getMessageType()).thenReturn(ApiConstants.PENDING);
+
+        when(api.callApi(eq(HttpMethod.GET), anyString(), anyString(), any(), any(), any(), any(), eq(ApiEnvelope.class)))
+                .thenReturn(pollPending, pollPending);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> service.run(filePath, "invoice.xlsx", 9L));
+
+        assertTrue(ex.getMessage().contains("polling timeout"));
+        verify(api, times(2)).callApi(eq(HttpMethod.GET), anyString(), anyString(), any(), any(), any(), any(), eq(ApiEnvelope.class));
+    }
+
+    // Helper to build ApiEnvelope.data as:
+    // [ { "statusCountMap": { "ERROR": 0, ... } } ]
+    private JsonNode pollDataWithStatusCount(Map<String, Integer> counts) {
+        ArrayNode arr = om.createArrayNode();
+        ObjectNode first = om.createObjectNode();
+        ObjectNode scm = om.createObjectNode();
+        counts.forEach(scm::put);
+        first.set("statusCountMap", scm);
+        arr.add(first);
+        return arr;
+    }
+}
