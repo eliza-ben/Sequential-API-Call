@@ -1,0 +1,54 @@
+package com.novaflow.action.service;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.stereotype.Service;
+
+import lombok.RequiredArgsConstructor;
+import reactor.core.publisher.Mono;
+
+@Service
+@RequiredArgsConstructor
+public class PresignedHttpService {
+
+    private final HttpClient httpClient;
+
+    public Mono<PresignedHttpResult> exchangeBytes(
+            HttpMethod method,
+            String url,
+            HttpHeaders headers,
+            byte[] bodyBytes
+    ) {
+        HttpRequest.Builder b = HttpRequest.newBuilder().uri(URI.create(url));
+
+        if (headers != null) {
+            headers.forEach((k, vals) -> {
+                if (k == null) return;
+                for (String v : vals) {
+                    if (v != null) b.header(k, v);
+                }
+            });
+        }
+
+        HttpRequest.BodyPublisher pub =
+                (bodyBytes == null || bodyBytes.length == 0)
+                        ? HttpRequest.BodyPublishers.noBody()
+                        : HttpRequest.BodyPublishers.ofByteArray(bodyBytes);
+
+        b.method(method.name(), pub);
+
+        return Mono.fromCompletionStage(httpClient.sendAsync(b.build(), HttpResponse.BodyHandlers.ofByteArray()))
+                .map(resp -> new PresignedHttpResult(resp.statusCode(), resp.headers(), resp.body()));
+    }
+
+    public record PresignedHttpResult(
+            int status,
+            HttpResponse.Headers headers,
+            byte[] bodyBytes
+    ) {}
+}
