@@ -1,0 +1,16 @@
+public class CentrlInvoiceUploadController {
+    private CentrlInvoiceUploadService uploadService;
+
+    public CentrlInvoiceUploadController(CentrlInvoiceUploadService uploadService) {
+        this.uploadService = uploadService;
+    }
+
+    @PostMapping(value = "/run")
+    public CentrlInvoiceResponse run(
+                           @RequestParam String filePath,
+                           @RequestParam String fileName,
+                           @RequestParam long partnerId
+    ) throws Exception {
+        return uploadService.run(Path.of(filePath), fileName, partnerId);
+    }
+}
