@@ -1,0 +1,81 @@
+public class ApiClient {
+    private final WebClient web;
+
+    public ApiClient(WebClient web) {
+        this.web = web;
+    }
+
+    public <T> T exchange(
+            HttpMethod method,
+            String url,
+            String bearerOrNull,
+            Object bodyOrNull,
+            MediaType contentTypeOrNull,
+            MediaType acceptOrNull,
+            Map<String, ?> queryParamsOrNull,
+            Map<String, String> headersOrNull,
+            Class<T> clazz
+    ) {
+        String finalUrl = withQuery(url, queryParamsOrNull);
+        WebClient.RequestBodySpec spec = web.method(method).uri(finalUrl);
+
+        spec.header(ApiConstants.CACHE_CONTROL, ApiConstants.NO_CACHE);
+
+        if (bearerOrNull != null && !bearerOrNull.isBlank()) {
+            spec.headers(h -> h.setBearerAuth(bearerOrNull));
+        }
+
+        if (headersOrNull != null) headersOrNull.forEach(spec::header);
+
+        if (acceptOrNull != null) spec.accept(acceptOrNull);
+        if (contentTypeOrNull != null) spec.contentType(contentTypeOrNull);
+
+        Mono<T> mono = (bodyOrNull == null)
+                ? spec.exchangeToMono(resp -> readOrThrow(resp, clazz))
+                : spec.body(BodyInserters.fromValue(bodyOrNull))
+                .exchangeToMono(resp -> readOrThrow(resp, clazz));
+
+        return mono.timeout(Duration.ofSeconds(60)).block();
+    }
+
+    public <T> T callApi(HttpMethod method, String url, String bearer, Object bodyOrNull, String contentType, Map<String, ?> queryParams, Map<String, String> headersOrNull, Class<T> clazz) {
+        log.info("Called HttpMethod {} with url {} bearer {}", method, url, bearer);
+        log.info(" contentype {}, body {}, queryParams {}, headers {}", contentType, bodyOrNull, queryParams, headersOrNull);
+        MediaType reqMt = (contentType == null) ? null : parseMediaTypeOrOctet(contentType);
+
+        return exchange(method, url, bearer, bodyOrNull, reqMt, ApiConstants.JSON, queryParams, headersOrNull, clazz);
+    }
+
+
+    private static String withQuery(String url, Map<String, ?> query) {
+        if (query == null || query.isEmpty()) return url;
+        UriComponentsBuilder b = UriComponentsBuilder.fromHttpUrl(url);
+        query.forEach(b::queryParam);
+        return b.build().encode(StandardCharsets.UTF_8).toUriString();
+    }
+
+    private static MediaType parseMediaTypeOrOctet(String contentType) {
+        if (contentType == null || contentType.isBlank()) return ApiConstants.OCTET;
+        try {
+            return MediaType.parseMediaType(contentType);
+        } catch (Exception e) {
+            return ApiConstants.OCTET;
+        }
+    }
+
+    private static <T> Mono<T> readOrThrow(ClientResponse resp, Class<T> clazz) {
+        if (resp.statusCode().is2xxSuccessful()) {
+            if (clazz == Void.class) return resp.toBodilessEntity().thenReturn(null);
+            return resp.bodyToMono(clazz);
+        }
+
+        return resp.bodyToMono(String.class)
+                .defaultIfEmpty("")
+                .flatMap(body -> Mono.error(new ApiClientException(
+                        resp.statusCode().value(),
+                        "HTTP " + resp.statusCode().value() + " error: " + body
+                )));
+    }
+
+
+}
