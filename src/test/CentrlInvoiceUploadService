@@ -1,0 +1,154 @@
+public class CentrlInvoiceUploadService {
+    private final AuthTokenService auth;
+    private final ApiClient api;
+    private final CentrlInvoiceProperties props;
+    private final CentrlPresignUploadService presignUploadService;
+
+    public CentrlInvoiceUploadService(ApiClient api, CentrlInvoiceProperties props, AuthTokenService auth, CentrlPresignUploadService presignUploadService) {
+        this.api = api;
+        this.props = props;
+        this.auth = auth;
+        this.presignUploadService = presignUploadService;
+    }
+
+    /**
+     * Complete centrl Fee Invoice upload flow: Step1 -> Step5 .
+     */
+    public CentrlInvoiceResponse run(Path filePath, String fileName, long partnerId)
+            throws Exception {
+        String contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+        log.info("FilePath: {}  fileName {}  partnerId: {} ", filePath, fileName, partnerId);
+
+        // Get the Access Token
+        TokenResponse token = auth.getTokenPasswordGrantStrict();
+        String accessToken = token.accessToken;
+        log.info("Before the Step 1 and Step 2");
+        // STEP 1 & 2 : get the presigned Url and upload the file to S3
+        String presignedUrlPath = props.getCentrlbaseurl() + props.getGetSignedUrlpath();
+
+        PresignedUploadResult presignedResult = presignUploadService.presignAndUpload(
+                URI.create(presignedUrlPath),
+                accessToken,
+                filePath,
+                fileName,
+                true,
+                false,
+                contentType);
+
+        // STEP 3: Update File Upload Status
+        log.info("After succesful uploading, getting the upload Status {}", props.getCentrlbaseurl() + props.getUpdateFileUoloadPath());
+
+        String getUpdateStatusUrl = expandTemplate(props.getCentrlbaseurl() + props.getUpdateFileUoloadPath(),
+                Map.of(
+                        "fileId", String.valueOf(presignedResult.getGeneratedId()),
+                        "fileVersionId", String.valueOf(presignedResult.getFileVersionId()),
+                        "fileUploadStatus", "true"
+                ));
+
+        ApiEnvelope updateFileUpload = api.callApi(HttpMethod.PUT, getUpdateStatusUrl, accessToken, null, null, null, null, ApiEnvelope.class);
+        requireMessageType(updateFileUpload, ApiConstants.SUCCESS);
+
+        // STEP 4: Create Invoice
+        String convertTnvoice = props.getCentrlbaseurl() + props.getCreateInvoicePath();
+        log.info("Creating the invoice  {}", convertTnvoice);
+
+        CreateInvoiceRequest createInvoiceRequest = new CreateInvoiceRequest(
+                "UPLOAD",
+                "INVOICE",
+                List.of(new CreateInvoiceRequestItem(
+                        true,
+                        Long.parseLong(presignedResult.getFileVersionId()),
+                        partnerId,
+                        fileName
+                ))
+        );
+
+        ApiEnvelope createInvoice = api.callApi(HttpMethod.POST, convertTnvoice, accessToken, createInvoiceRequest, null, null, null, ApiEnvelope.class);
+
+        String invoiceUploadId = createInvoice.getMessage();
+        if (invoiceUploadId == null || invoiceUploadId.isBlank()) {
+            throw new IllegalStateException("Step4 did not return trackingId in 'message'. messageType=" + createInvoice.getMessageType());
+        }
+
+        // STEP 5: Status Polling until SUCCESS (or timeout)
+        log.info("Polling for the Status  {}", props.getCentrlbaseurl() + props.getPollStatusPath());
+
+        statusPolling(accessToken, invoiceUploadId);
+        log.info("File {} upload completed with success", fileName);
+
+        return new CentrlInvoiceResponse(fileName, "SUCCESS");
+    }
+
+    private ApiEnvelope statusPolling(String bearerToken, String invoiceUploadId) throws InterruptedException {
+        String pollStatusUrl = expandTemplate(props.getCentrlbaseurl() + props.getPollStatusPath(),
+                Map.of("invoiceUploadId", invoiceUploadId));
+
+        int max = props.getPoll().getMaxAttempts();
+        long sleepMs = props.getPoll().getSleepMillis();
+
+        ApiEnvelope result = null;
+
+        for (int i = 0; i < max; i++) {
+            result = api.callApi(HttpMethod.GET, pollStatusUrl, bearerToken, null, null, null, null, ApiEnvelope.class);
+
+            String mt = result.getMessageType();
+            if (ApiConstants.PENDING.equalsIgnoreCase(mt)) {
+                Thread.sleep(sleepMs);
+                continue;
+            }
+
+            if (ApiConstants.SUCCESS.equalsIgnoreCase(mt)) {
+                Map<String, Integer> counts = extractStatusCountMap(result);
+
+                // If API shows ERROR > 1, treat as failure
+                int err = counts.getOrDefault("ERROR", 0);
+                if (err > 1) {
+                    throw new IllegalStateException("Step5 finished with ERROR count=" + err + " counts=" + counts + " message=" + result.getMessage());
+                }
+
+                return result;
+            }
+
+            throw new IllegalStateException("Step5 unexpected messageType=" + mt + " message=" + result.getMessage());
+        }
+
+        throw new IllegalStateException("Step5 polling timeout after " + max + " attempts. Last messageType=" +
+                (result == null ? "null" : result.getMessageType()));
+    }
+
+
+    // Extract the error count from the polling of status
+    private static Map<String, Integer> extractStatusCountMap(ApiEnvelope env) {
+        JsonNode data = env.getData();
+        if (data == null || !data.isArray() || data.isEmpty()) return Map.of();
+
+        JsonNode first = data.get(0);
+        JsonNode scm = first.get("statusCountMap");
+        if (scm == null || !scm.isObject()) return Map.of();
+
+        HashMap<String, Integer> out = new HashMap<>();
+        scm.fields().forEachRemaining(e -> out.put(e.getKey(), e.getValue().asInt()));
+        return out;
+    }
+
+    // Check if the response MessageType is as expected
+    private static void requireMessageType(ApiEnvelope env, String expected) {
+        if (env == null) throw new IllegalStateException("Null response body");
+        String mt = env.getMessageType();
+        if (mt == null || !expected.equalsIgnoreCase(mt)) {
+            throw new IllegalStateException("Unexpected messageType=" + mt + " expected=" + expected + " message=" + env.getMessage());
+        }
+    }
+
+    // replace the variable in the url with the Map provided
+    private static String expandTemplate(String s, Map<String, String> vars) {
+        String out = s;
+        for (var e : vars.entrySet()) {
+            out = out.replace("{" + e.getKey() + "}", e.getValue());
+        }
+        return out;
+    }
+
+
+}
