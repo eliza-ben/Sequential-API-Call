@@ -1,0 +1,28 @@
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.nio.file.Path;
+
+import org.junit.jupiter.api.Test;
+
+class CentrlInvoiceUploadControllerUnitTest {
+
+    @Test
+    void run_delegatesToService() throws Exception {
+        CentrlInvoiceUploadService service = mock(CentrlInvoiceUploadService.class);
+        CentrlInvoiceUploadController controller = new CentrlInvoiceUploadController(service);
+
+        String filePath = "/tmp/invoice.xlsx";
+        String fileName = "invoice.xlsx";
+        long partnerId = 123L;
+
+        CentrlInvoiceResponse expected = new CentrlInvoiceResponse(); // adjust as needed
+        when(service.run(Path.of(filePath), fileName, partnerId)).thenReturn(expected);
+
+        CentrlInvoiceResponse actual = controller.run(filePath, fileName, partnerId);
+
+        assertSame(expected, actual);
+        verify(service).run(Path.of(filePath), fileName, partnerId);
+        verifyNoMoreInteractions(service);
+    }
+}
