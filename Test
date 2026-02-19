@@ -1,0 +1,24 @@
+    public <T> T getJson(String url, String bearer, Class<T> clazz) {
+        return exchange(HttpMethod.GET, url, bearer, null, null, FeeInvoiceAPiDefaults.JSON, null, null, clazz);
+    }
+
+    public <T> T putNoBodyExpectJson(String url, String bearer, Class<T> clazz) {
+        return exchange(HttpMethod.PUT, url, bearer, null, null, FeeInvoiceAPiDefaults.JSON, null, null, clazz);
+    }
+
+    public <T> T postJson(String url, String bearer, Object body, Class<T> clazz) {
+        return exchange(HttpMethod.POST, url, bearer, body, FeeInvoiceAPiDefaults.JSON, FeeInvoiceAPiDefaults.JSON, null, null, clazz);
+    }
+
+    public <T> T postBytesWithQuery(
+            String url,
+            String bearer,
+            byte[] bytes,
+            String contentType,
+            Map<String, ?> queryParams,
+            Class<T> clazz
+    ) {
+        MediaType mt = parseMediaTypeOrOctet(contentType);
+        log.info("url: {}", url);
+        return exchange(HttpMethod.POST, url, bearer, bytes, mt, null, queryParams, null, clazz);
+    }
