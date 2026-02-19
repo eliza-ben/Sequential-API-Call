@@ -1,0 +1,175 @@
+package com.yourco.files.service;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yourco.files.dto.PresignUploadResultDto;
+import org.springframework.stereotype.Service;
+
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.Base64;
+
+@Service
+public class PresignUploadService {
+
+    private final HttpClient httpClient;
+    private final ObjectMapper objectMapper;
+
+    public PresignUploadService(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+        this.httpClient = HttpClient.newHttpClient();
+    }
+
+    /**
+     * Step 2: POST {ws_url}/file?autoUploadDuplicateFile=true&contentMD5=...&fileLength=...&fileName=...
+     * Step 3: PUT to S3 presigned URL with Content-MD5
+     *
+     * NOTE: If SignedHeaders=content-md5;host, do NOT send Content-Type on PUT.
+     */
+    public PresignUploadResultDto presignAndUpload(
+            URI presignApiBaseUri,
+            String bearerToken,
+            Path file,
+            String fileNameForServer,
+            boolean autoUploadDuplicateFile,
+            boolean sendContentTypeOnPut,
+            String contentType
+    ) throws Exception {
+
+        // --- Read file bytes once ---
+        byte[] bytes = Files.readAllBytes(file);
+        long fileLength = bytes.length;
+
+        // --- base64(MD5(fileBytes)) ---
+        String contentMd5Base64 = Base64.getEncoder().encodeToString(
+                MessageDigest.getInstance("MD5").digest(bytes)
+        );
+
+        // --- Step 2 URL query params ---
+        String q = "autoUploadDuplicateFile=" + autoUploadDuplicateFile
+                + "&contentMD5=" + URLEncoder.encode(contentMd5Base64, StandardCharsets.UTF_8)
+                + "&fileLength=" + fileLength
+                + "&fileName=" + URLEncoder.encode(fileNameForServer, StandardCharsets.UTF_8);
+
+        URI presignUri = URI.create(presignApiBaseUri.toString()
+                + (presignApiBaseUri.toString().contains("?") ? "&" : "?")
+                + q);
+
+        // --- Authorization header ---
+        String auth = normalizeBearer(bearerToken);
+
+        // --- Step 2: POST no body ---
+        HttpRequest presignReq = HttpRequest.newBuilder()
+                .uri(presignUri)
+                .header("Authorization", auth)
+                .header("Accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+
+        HttpResponse<String> presignResp = httpClient.send(presignReq, HttpResponse.BodyHandlers.ofString());
+        int step2Status = presignResp.statusCode();
+        String step2Body = presignResp.body();
+
+        if (step2Status < 200 || step2Status >= 300) {
+            throw new RuntimeException("Presign API failed: " + step2Status + " body=" + step2Body);
+        }
+
+        // --- Parse Step 2 response ---
+        ParsedPresign parsed = parsePresign(step2Body);
+
+        // --- Step 3: PUT upload to S3 presigned URL ---
+        HttpRequest.Builder putBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(parsed.preSignedUrl))
+                .header("Content-MD5", contentMd5Base64.trim())
+                .PUT(HttpRequest.BodyPublishers.ofByteArray(bytes));
+
+        if (sendContentTypeOnPut && contentType != null && !contentType.isBlank()) {
+            putBuilder.header("Content-Type", contentType);
+        }
+
+        HttpResponse<String> putResp = httpClient.send(putBuilder.build(), HttpResponse.BodyHandlers.ofString());
+        int uploadStatus = putResp.statusCode();
+        String uploadBody = putResp.body();
+
+        if (uploadStatus != 200 && uploadStatus != 204) {
+            throw new RuntimeException("Upload failed: " + uploadStatus + " body=" + uploadBody);
+        }
+
+        return new PresignUploadResultDto(
+                parsed.preSignedUrl,
+                parsed.generatedId,
+                parsed.fileVersionId,
+                step2Status,
+                step2Body,
+                uploadStatus,
+                uploadBody
+        );
+    }
+
+    // ----------------- helpers -----------------
+
+    private static String normalizeBearer(String bearerToken) {
+        String auth = bearerToken == null ? "" : bearerToken.trim();
+        if (auth.isEmpty()) return "";
+        if (!auth.toLowerCase().startsWith("bearer ")) auth = "Bearer " + auth;
+        return auth;
+    }
+
+    private record ParsedPresign(String preSignedUrl, String generatedId, String fileVersionId) {}
+
+    private ParsedPresign parsePresign(String step2Body) throws Exception {
+        JsonNode root = objectMapper.readTree(step2Body);
+
+        String generatedId = asString(root.get("generatedId"));
+
+        String preSignedUrl = null;
+        String fileVersionId = null;
+
+        JsonNode dataNode = root.path("data");
+        if (dataNode.isArray()) {
+            for (JsonNode item : dataNode) {
+                if (preSignedUrl == null) {
+                    preSignedUrl = firstNonBlank(item, "preSignedURL", "preSignedUrl", "presignedUrl");
+                }
+                if (fileVersionId == null) {
+                    fileVersionId = firstNonBlank(item, "fileVersionId", "fileVersionID");
+                }
+            }
+        }
+
+        if (preSignedUrl == null) preSignedUrl = firstNonBlank(root, "preSignedURL", "preSignedUrl", "presignedUrl");
+        if (fileVersionId == null) fileVersionId = firstNonBlank(root, "fileVersionId", "fileVersionID");
+
+        if (generatedId == null || generatedId.isBlank()) {
+            throw new RuntimeException("Could not find generatedId in response JSON: " + step2Body);
+        }
+        if (preSignedUrl == null || preSignedUrl.isBlank()) {
+            throw new RuntimeException("Could not find preSignedURL in response JSON: " + step2Body);
+        }
+        if (fileVersionId == null || fileVersionId.isBlank()) {
+            throw new RuntimeException("Could not find fileVersionId in response JSON: " + step2Body);
+        }
+
+        return new ParsedPresign(preSignedUrl, generatedId, fileVersionId);
+    }
+
+    private static String firstNonBlank(JsonNode node, String... keys) {
+        for (String k : keys) {
+            String s = asString(node.get(k));
+            if (s != null && !s.isBlank()) return s;
+        }
+        return null;
+    }
+
+    private static String asString(JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        return node.asText();
+    }
+}
