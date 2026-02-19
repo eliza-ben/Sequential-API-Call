@@ -1,0 +1,268 @@
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.Base64;
+import java.util.Optional;
+
+@ExtendWith(MockitoExtension.class)
+class CentrlPresignUploadServiceUnitTest {
+
+    @Test
+    void presignAndUpload_happyPath_sendsPresignThenPut_andReturnsResult() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        HttpClient http = mock(HttpClient.class);
+
+        CentrlPresignUploadService svc = new CentrlPresignUploadService(om, http);
+
+        // temp file with known bytes
+        Path tmp = Files.createTempFile("invoice", ".xlsx");
+        byte[] bytes = "hello-world".getBytes(StandardCharsets.UTF_8);
+        Files.write(tmp, bytes);
+
+        String md5b64 = Base64.getEncoder().encodeToString(MessageDigest.getInstance("MD5").digest(bytes));
+        long len = bytes.length;
+
+        // Step 1 presign response JSON
+        String presignedUrl = "https://s3.example.com/bucket/key?X-Amz-Signature=abc";
+        String fileVersionId = "2002";
+        String generatedId = "1001";
+        String presignJson = """
+            {
+              "generatedId": "%s",
+              "data": [{
+                "preSignedURL": "%s",
+                "fileVersionId": "%s"
+              }]
+            }
+            """.formatted(generatedId, presignedUrl, fileVersionId);
+
+        // mock send() twice: first presign, then PUT upload
+        when(http.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenReturn(new StringHttpResponse(200, presignJson))
+                .thenReturn(new StringHttpResponse(200, "")); // upload ok (200)
+
+        URI base = URI.create("https://centrl.example.com/file");
+        String bearer = "TOKEN";
+        String fileNameForServer = "Bank Invoice.xlsx";
+
+        // Act
+        PresignedUploadResult result = svc.presignAndUpload(
+                base,
+                bearer,
+                tmp,
+                fileNameForServer,
+                true,
+                true,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+
+        // Assert result
+        assertNotNull(result);
+        assertEquals(presignedUrl, result.getPreSignedUrl());
+        assertEquals(fileVersionId, result.getFileVersionId());
+        assertEquals(generatedId, result.getGeneratedId());
+
+        // Capture requests
+        ArgumentCaptor<HttpRequest> reqCap = ArgumentCaptor.forClass(HttpRequest.class);
+        verify(http, times(2)).send(reqCap.capture(), any(HttpResponse.BodyHandler.class));
+
+        HttpRequest presignReq = reqCap.getAllValues().get(0);
+        HttpRequest putReq = reqCap.getAllValues().get(1);
+
+        // ---- Step 1 assertions
+        assertEquals("POST", presignReq.method());
+        assertTrue(presignReq.uri().toString().startsWith(base.toString() + "?") ||
+                   presignReq.uri().toString().startsWith(base.toString() + "&"));
+
+        String expectedEncodedMd5 = URLEncoder.encode(md5b64, StandardCharsets.UTF_8);
+        String expectedEncodedName = URLEncoder.encode(fileNameForServer, StandardCharsets.UTF_8);
+
+        String presignUrl = presignReq.uri().toString();
+        assertTrue(presignUrl.contains("autoUploadDuplicateFile=true"));
+        assertTrue(presignUrl.contains("contentMD5=" + expectedEncodedMd5));
+        assertTrue(presignUrl.contains("fileLength=" + len));
+        assertTrue(presignUrl.contains("fileName=" + expectedEncodedName));
+
+        assertEquals("Bearer " + bearer, firstHeader(presignReq, "Authorization"));
+        assertEquals("application/json", firstHeader(presignReq, "Accept"));
+
+        // ---- Step 2 assertions
+        assertEquals("PUT", putReq.method());
+        assertEquals(URI.create(presignedUrl), putReq.uri());
+        assertEquals(md5b64, firstHeader(putReq, "Content-MD5"));
+        assertEquals("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                firstHeader(putReq, "Content-Type"));
+    }
+
+    @Test
+    void presignAndUpload_whenSendContentTypeOnPutFalse_doesNotSendContentType() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        HttpClient http = mock(HttpClient.class);
+        CentrlPresignUploadService svc = new CentrlPresignUploadService(om, http);
+
+        Path tmp = Files.createTempFile("invoice", ".xlsx");
+        Files.write(tmp, "abc".getBytes(StandardCharsets.UTF_8));
+
+        String presignJson = """
+            {"generatedId":"1","data":[{"preSignedURL":"https://s3/u","fileVersionId":"2"}]}
+            """;
+
+        when(http.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenReturn(new StringHttpResponse(200, presignJson))
+                .thenReturn(new StringHttpResponse(204, "")); // upload ok (204)
+
+        svc.presignAndUpload(
+                URI.create("https://centrl/file"),
+                "T",
+                tmp,
+                "x.xlsx",
+                true,
+                false, // ✅
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+
+        ArgumentCaptor<HttpRequest> reqCap = ArgumentCaptor.forClass(HttpRequest.class);
+        verify(http, times(2)).send(reqCap.capture(), any(HttpResponse.BodyHandler.class));
+        HttpRequest putReq = reqCap.getAllValues().get(1);
+
+        assertTrue(putReq.headers().firstValue("Content-Type").isEmpty(),
+                "Content-Type should not be set when sendContentTypeOnPut=false");
+    }
+
+    @Test
+    void presignAndUpload_presignNon2xx_throws() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        HttpClient http = mock(HttpClient.class);
+        CentrlPresignUploadService svc = new CentrlPresignUploadService(om, http);
+
+        Path tmp = Files.createTempFile("invoice", ".xlsx");
+        Files.write(tmp, "abc".getBytes(StandardCharsets.UTF_8));
+
+        when(http.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenReturn(new StringHttpResponse(400, "bad request"));
+
+        RuntimeException ex = assertThrows(RuntimeException.class, () ->
+                svc.presignAndUpload(
+                        URI.create("https://centrl/file"),
+                        "T",
+                        tmp,
+                        "x.xlsx",
+                        true,
+                        false,
+                        "application/octet-stream"
+                )
+        );
+
+        assertTrue(ex.getMessage().contains("Presign API failed: 400"));
+    }
+
+    @Test
+    void presignAndUpload_uploadNon200or204_throws() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        HttpClient http = mock(HttpClient.class);
+        CentrlPresignUploadService svc = new CentrlPresignUploadService(om, http);
+
+        Path tmp = Files.createTempFile("invoice", ".xlsx");
+        Files.write(tmp, "abc".getBytes(StandardCharsets.UTF_8));
+
+        String presignJson = """
+            {"generatedId":"1","data":[{"preSignedURL":"https://s3/u","fileVersionId":"2"}]}
+            """;
+
+        when(http.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenReturn(new StringHttpResponse(200, presignJson))
+                .thenReturn(new StringHttpResponse(403, "forbidden")); // upload fails
+
+        RuntimeException ex = assertThrows(RuntimeException.class, () ->
+                svc.presignAndUpload(
+                        URI.create("https://centrl/file"),
+                        "T",
+                        tmp,
+                        "x.xlsx",
+                        true,
+                        false,
+                        "application/octet-stream"
+                )
+        );
+
+        assertTrue(ex.getMessage().contains("Upload failed: 403"));
+    }
+
+    @Test
+    void presignAndUpload_missingFieldsInPresignJson_throws() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        HttpClient http = mock(HttpClient.class);
+        CentrlPresignUploadService svc = new CentrlPresignUploadService(om, http);
+
+        Path tmp = Files.createTempFile("invoice", ".xlsx");
+        Files.write(tmp, "abc".getBytes(StandardCharsets.UTF_8));
+
+        // Missing generatedId + fileVersionId
+        String badJson = """{"data":[{"preSignedURL":"https://s3/u"}]}""";
+
+        when(http.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenReturn(new StringHttpResponse(200, badJson));
+
+        RuntimeException ex = assertThrows(RuntimeException.class, () ->
+                svc.presignAndUpload(
+                        URI.create("https://centrl/file"),
+                        "T",
+                        tmp,
+                        "x.xlsx",
+                        true,
+                        false,
+                        "application/octet-stream"
+                )
+        );
+
+        assertTrue(ex.getMessage().contains("Could not find"),
+                "Should fail with 'Could not find ...' message");
+    }
+
+    // ---------- helpers ----------
+
+    private static String firstHeader(HttpRequest req, String name) {
+        return req.headers().firstValue(name).orElse(null);
+    }
+
+    /**
+     * Minimal HttpResponse<String> for mocking HttpClient.send(...)
+     */
+    private static final class StringHttpResponse implements HttpResponse<String> {
+        private final int status;
+        private final String body;
+
+        private StringHttpResponse(int status, String body) {
+            this.status = status;
+            this.body = body;
+        }
+
+        @Override public int statusCode() { return status; }
+        @Override public String body() { return body; }
+
+        // Unused methods for these tests:
+        @Override public HttpRequest request() { return null; }
+        @Override public Optional<HttpResponse<String>> previousResponse() { return Optional.empty(); }
+        @Override public HttpHeaders headers() { return HttpHeaders.of(Map.of(), (a, b) -> true); }
+        @Override public URI uri() { return null; }
+        @Override public HttpClient.Version version() { return HttpClient.Version.HTTP_1_1; }
+        @Override public Optional<javax.net.ssl.SSLSession> sslSession() { return Optional.empty(); }
+    }
+}
